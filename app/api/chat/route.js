@@ -262,14 +262,43 @@ ${JSON.stringify(schoolEvents, null, 2)}
 Before answering, examine ALL of the information above.
 Return only the answer to send to the parent.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }
-      ]
-    });
+   // Helper function to query Gemini with retry & fallback models on 503
+    async function callGeminiWithFallback(fullPrompt) {
+      const modelsToTry = [
+        'gemini-3.8-flash',
+        'gemini-3.8-flash-lite',
+        'gemini-2.0-flash'
+      ];
 
-    return Response.json({ answer: response.text });
+      let lastError = null;
+
+      for (const modelName of modelsToTry) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const res = await ai.models.generateContent({
+              model: modelName,
+              contents: [{ role: 'user', parts: [{ text: fullPrompt }] }]
+            });
+            if (res?.text) return res.text;
+          } catch (err) {
+            lastError = err;
+            // If it's a 503 high demand error, pause briefly and retry or fall back to the next model
+            if (err?.message?.includes('503') || err?.status === 'UNAVAILABLE') {
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              continue;
+            }
+            // For other non-transient errors, break to next model
+            break;
+          }
+        }
+      }
+      throw lastError;
+    }
+
+    const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+    const generatedAnswer = await callGeminiWithFallback(fullPrompt);
+
+    return Response.json({ answer: generatedAnswer });
   } catch (error) {
     console.error('Error in MB411 Calendar Assistant:', error);
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
