@@ -51,6 +51,15 @@ const formatTimeEastern = (d) => {
   }).format(d);
 };
 
+const getEasternIsoDate = (d) => {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date(d));
+};
+
 const cleanCalendarEvents = (events) => {
   if (!Array.isArray(events)) return [];
 
@@ -60,10 +69,9 @@ const cleanCalendarEvents = (events) => {
       const startDate = new Date(event.start);
       const endDate = event.end ? new Date(event.end) : null;
 
+      const startIso = getEasternIsoDate(startDate);
       let formattedDateRange = formatDateEastern(startDate);
-      const startIso = startDate.toISOString().slice(0, 10);
 
-      // Determine all-day vs timed
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
       let timeString = 'All Day';
 
@@ -76,9 +84,14 @@ const cleanCalendarEvents = (events) => {
       }
 
       if (endDate && endDate > startDate) {
+        // Subtract 1 second to handle exclusive midnight end-dates
         const inclusiveEndDate = new Date(endDate.getTime() - 1000);
-        if (formatDateEastern(startDate) !== formatDateEastern(inclusiveEndDate)) {
+        const endIso = getEasternIsoDate(inclusiveEndDate);
+
+        if (startIso !== endIso) {
           formattedDateRange = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
+        } else {
+          formattedDateRange = formatDateEastern(startDate);
         }
       }
 
@@ -179,15 +192,19 @@ export async function POST(req) {
       a.startIso.localeCompare(b.startIso)
     );
 
-    // Rotating Day Schedule (Cal 3)
+    // Rotating Day Schedule (Cal 3) - Explicit single-day dates
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
-      .map((event) => ({
-        date: event.dateRange,
-        isoDate: event.startIso,
-        rotatingDay: event.rotatingDay,
-        subjects: kindergartenSubjects[event.rotatingDay] || []
-      }))
+      .map((event) => {
+        const [year, month, day] = event.startIso.split('-').map(Number);
+        const noonDate = new Date(Date.UTC(year, month - 1, day, 16));
+        return {
+          date: formatDateEastern(noonDate),
+          isoDate: event.startIso,
+          rotatingDay: event.rotatingDay,
+          subjects: kindergartenSubjects[event.rotatingDay] || []
+        };
+      })
       .sort((a, b) => a.isoDate.localeCompare(b.isoDate));
 
     const schoolDaySchedule = kindergartenUpcomingSchedule.map((event) => ({
@@ -218,6 +235,7 @@ RULES:
 - Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
 - When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
 - Report the rotating Day number (Day 1-7) and Kindergarten subjects.
+- Rotating days are single school days. Report them as the single calendar date (e.g., "Tuesday, September 29, 2026"), never as a date range.
 - For questions asking about "Sharing Day" or "Meeting for Sharing", search CLEAN SCHOOL DAY SCHEDULE for the next date where the rotating day subjects include "Meeting for Sharing" (which occurs on Day 4).
 - For questions asking about "Meeting for Business", search for the next date that includes "Meeting for Business" (which occurs on Day 7).
 
