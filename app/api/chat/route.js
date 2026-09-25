@@ -51,6 +51,7 @@ const formatTimeEastern = (d) => {
   }).format(d);
 };
 
+// Accurate Eastern Date String: YYYY-MM-DD
 const getEasternIsoDate = (d) => {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
@@ -84,8 +85,8 @@ const cleanCalendarEvents = (events) => {
       }
 
       if (endDate && endDate > startDate) {
-        // Subtract 1 second to handle exclusive midnight end-dates
-        const inclusiveEndDate = new Date(endDate.getTime() - 1000);
+        // Only treat as multi-day if start date and inclusive end date differ in Eastern time
+        const inclusiveEndDate = new Date(endDate.getTime() - 60000);
         const endIso = getEasternIsoDate(inclusiveEndDate);
 
         if (startIso !== endIso) {
@@ -192,14 +193,14 @@ export async function POST(req) {
       a.startIso.localeCompare(b.startIso)
     );
 
-    // Rotating Day Schedule (Cal 3) - Explicit single-day dates
+    // Rotating Day Schedule (Cal 3)
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
       .map((event) => {
         const [year, month, day] = event.startIso.split('-').map(Number);
-        const noonDate = new Date(Date.UTC(year, month - 1, day, 16));
+        const localNoon = new Date(Date.UTC(year, month - 1, day, 16));
         return {
-          date: formatDateEastern(noonDate),
+          date: formatDateEastern(localNoon),
           isoDate: event.startIso,
           rotatingDay: event.rotatingDay,
           subjects: kindergartenSubjects[event.rotatingDay] || []
@@ -218,45 +219,77 @@ export async function POST(req) {
     const tomorrowEastern = getEasternDate(1);
     const next7Days = Array.from({ length: 7 }, (_, i) => getEasternDate(i));
 
+    // Ground truth check for Today:
+    const isWeekendToday = todayEastern.weekday === 'Saturday' || todayEastern.weekday === 'Sunday';
+    const closuresToday = schoolEvents.filter(
+      (e) =>
+        e.startIso === todayEastern.iso &&
+        /\b(no school|closed|holiday|break|in-service|vacation)\b/i.test(e.title)
+    );
+    const rotatingScheduleToday = schoolDaySchedule.find((s) => s.date === todayEastern.iso);
+
+    const todayStatusInfo = {
+      date: todayEastern.formatted,
+      weekday: todayEastern.weekday,
+      isWeekend: isWeekendToday,
+      isSchoolInSession: !isWeekendToday && closuresToday.length === 0,
+      closures: closuresToday.map((c) => c.title),
+      rotatingDay: rotatingScheduleToday?.day || 'No rotating day scheduled',
+      kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
+    };
+
     const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
-RULES:
+const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
-1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you. Never invent or assume school information.
+CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 
-2. Timezone: Use America/New_York as the local timezone. Correctly interpret relative dates (today, tomorrow, this week, next week, upcoming months).
+1. SOURCE OF TRUTH:
+- Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, TODAY GROUND TRUTH STATUS, and Kindergarten Rotating Day Subjects provided to you.
+- Never invent, extrapolate, or assume school information.
+- If the requested information genuinely does not exist anywhere in the provided calendar or schedule data, say exactly:
+"I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
 
-3. NAMED EVENT LOOKUPS:
-- Search both titles and descriptions in SCHOOL CALENDAR EVENTS.
-- Whenever an event is found, ALWAYS include the exact date, time (unless marked "All Day"), and location in your response.
-- Example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
+2. TIMEZONE & RELATIVE DATES:
+- Local timezone is America/New_York.
+- Correctly interpret relative dates (today, tomorrow, this week, next week, upcoming months).
+- Friday is a standard weekday, never a weekend day.
 
-4. SCHOOL OPEN / CLOSURE DETERMINATION RULES:
-- Weekends (Saturday and Sunday) are not school days.
-- For weekdays (Monday through Friday):
-  a. First check SCHOOL CALENDAR EVENTS for explicit closure terms: "No School", "Closed", "In-Service", "Holiday", "Vacation", or "Break". If any of these are present for that date, school is CLOSED.
-  b. Check CLEAN SCHOOL DAY SCHEDULE: If the date has an assigned rotating school day (Day 1 through Day 7), school is definitely IN SESSION.
-  c. If it is a regular weekday, no closure events are listed, and/or a rotating school day exists, answer clearly that YES, school is in session. Never claim school is closed simply because there is no event labeled "School Open".
+3. SCHOOL OPEN / CLOSURE DETERMINATION RULES:
+- When a parent asks "is there school today", "is school open tomorrow", or asks about a specific date:
+  a. Consult TODAY GROUND TRUTH STATUS for today's status.
+  b. For other dates: Weekends (Saturday and Sunday) have no regular school.
+  c. For weekdays (Monday through Friday): Check SCHOOL CALENDAR EVENTS for explicit closure terms ("No School", "Closed", "In-Service", "Holiday", "Break", "Vacation"). If present, report school is closed and name the reason.
+  d. If it is a weekday, no closure events exist on the calendar, and/or a rotating Day (Day 1–7) is scheduled, state clearly that school is in session. Never claim school is closed simply because there isn't a calendar event explicitly titled "School Open".
 
-5. ROTATING DAY SCHEDULE & KINDERGARTEN SUBJECTS:
+4. ROTATING DAY SCHEDULE & KINDERGARTEN SUBJECTS:
 - Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
 - When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
-- Report the rotating Day number (Day 1-7) and Kindergarten subjects.
+- Report the rotating Day number (Day 1-7) and explicitly identify it as the Kindergarten / Lower School Day number.
+- For Kindergarten subject questions, use the kindergartenSubjects listed for that rotating Day.
 - Rotating days are single school days. Report them as the single calendar date (e.g., "Tuesday, September 29, 2026"), never as a date range.
 - For questions asking about "Sharing Day" or "Meeting for Sharing", search CLEAN SCHOOL DAY SCHEDULE for the next date where the rotating day subjects include "Meeting for Sharing" (which occurs on Day 4).
 - For questions asking about "Meeting for Business", search for the next date that includes "Meeting for Business" (which occurs on Day 7).
 
-6. If the requested information genuinely does not exist anywhere in the provided calendar data, say:
-"I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
+5. NAMED EVENT LOOKUPS:
+- Search both titles and descriptions in SCHOOL CALENDAR EVENTS.
+- Whenever an event is found, ALWAYS include the exact date, start/end time (unless marked "All Day"), and location in your response.
+- Example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
+- When a parent asks to list events for a specific month (e.g., "November"), list ALL events from the SCHOOL CALENDAR EVENTS list whose date falls within that month in the upcoming school year.
 
-7. Keep answers concise, clear, and parent-friendly. Return ONLY the answer to send to the parent.`;
+6. OUTPUT FORMAT:
+- Keep answers concise, clear, and parent-friendly.
+- Return ONLY the final message text to send directly to the parent. No meta-commentary, conversational filler, or internal reasoning.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
 ${question}
 
-CURRENT DATE REFERENCE (America/New_York):
-• Today: ${todayEastern.formatted} (${todayEastern.iso})
-• Tomorrow: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
+TODAY GROUND TRUTH STATUS:
+${JSON.stringify(todayStatusInfo, null, 2)}
+
+CURRENT DATE REFERENCE:
+• Today: ${todayEastern.formatted} (${todayEastern.iso}) - ${todayEastern.weekday}
+• Tomorrow: ${tomorrowEastern.formatted} (${tomorrowEastern.iso}) - ${tomorrowEastern.weekday}
 
 UPCOMING WEEK DATES:
 ${next7Days.map((d) => `• ${d.weekday}: ${d.formatted} (${d.iso})`).join('\n')}
@@ -267,10 +300,7 @@ ${JSON.stringify(schoolDaySchedule, null, 2)}
 SCHOOL CALENDAR EVENTS:
 ${JSON.stringify(schoolEvents, null, 2)}
 
-KINDERGARTEN ROTATING DAY SUBJECTS:
-${JSON.stringify(kindergartenSubjects, null, 2)}
-
-Examine the schedule and calendar data. Return only the final answer for the parent.`;
+Return only the final answer for the parent.`;
 
     let generatedAnswer = null;
     let lastError = null;
@@ -311,4 +341,5 @@ Examine the schedule and calendar data. Return only the final answer for the par
     console.error('Error in MB411 Calendar Assistant:', error);
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
   }
+}
 }
