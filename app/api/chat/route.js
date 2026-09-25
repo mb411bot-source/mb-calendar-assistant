@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
-import { google } from 'googleapis';
+import { gmail, auth } from '@googleapis/gmail';
 
 // 1. Moses Brown iCal Feeds
 const FEEDS = [
@@ -144,6 +144,7 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
+// --- GMAIL FETCHER FUNCTION ---
 async function fetchRecentSchoolEmails() {
   if (
     !process.env.GMAIL_CLIENT_ID ||
@@ -154,7 +155,7 @@ async function fetchRecentSchoolEmails() {
   }
 
   try {
-    const oauth2Client = new google.auth.OAuth2(
+    const oauth2Client = new auth.OAuth2(
       process.env.GMAIL_CLIENT_ID,
       process.env.GMAIL_CLIENT_SECRET
     );
@@ -162,12 +163,11 @@ async function fetchRecentSchoolEmails() {
       refresh_token: process.env.GMAIL_REFRESH_TOKEN
     });
 
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const gmailClient = gmail({ version: 'v1', auth: oauth2Client });
 
-    const listRes = await gmail.users.messages.list({
+    const listRes = await gmailClient.users.messages.list({
       userId: 'me',
-      q: 'from:mosesbrown.org newer_than:45d',
-      maxResults: 6
+      maxResults: 8
     });
 
     const messages = listRes.data.messages || [];
@@ -176,7 +176,7 @@ async function fetchRecentSchoolEmails() {
     const detailedEmails = await Promise.all(
       messages.map(async (msg) => {
         try {
-          const detail = await gmail.users.messages.get({
+          const detail = await gmailClient.users.messages.get({
             userId: 'me',
             id: msg.id,
             format: 'metadata',
@@ -184,9 +184,9 @@ async function fetchRecentSchoolEmails() {
           });
 
           const headers = detail.data.payload?.headers || [];
-          const subject = headers.find((h) => h.name === 'Subject')?.value || 'No Subject';
-          const date = headers.find((h) => h.name === 'Date')?.value || '';
-          const from = headers.find((h) => h.name === 'From')?.value || '';
+          const subject = headers.find((h) => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
+          const date = headers.find((h) => h.name?.toLowerCase() === 'date')?.value || '';
+          const from = headers.find((h) => h.name?.toLowerCase() === 'from')?.value || '';
           const snippet = detail.data.snippet || '';
 
           return {
@@ -220,7 +220,7 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Fetch calendar feeds and Gmail communications concurrently
+    // Fetch calendar feeds and Gmail concurrently
     const [rawParsedFeeds, gmailResults] = await Promise.all([
       Promise.all(
         FEEDS.map(async (feed) => {
@@ -414,7 +414,7 @@ Return only the final answer for the parent.`;
 
     return Response.json({ answer: generatedAnswer });
   } catch (error) {
-    console.error('Error in MB411 Calendar Assistant:', error);
+    console.error('Error in Mo B Calendar Assistant:', error);
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
   }
 }
