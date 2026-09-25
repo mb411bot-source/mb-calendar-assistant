@@ -262,37 +262,38 @@ ${JSON.stringify(schoolEvents, null, 2)}
 Before answering, examine ALL of the information above.
 Return only the answer to send to the parent.`;
 
-  // Helper function to query Gemini with retry on active 3.x models
-    async function callGeminiWithFallback(fullPrompt) {
-      const modelsToTry = [
-        'gemini-3.8-flash',
-        'gemini-3.8-flash-lite'
-      ];
+    let generatedAnswer = null;
+    let lastError = null;
 
-      let lastError = null;
+    // Use current active models
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
 
-      for (const modelName of modelsToTry) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            const res = await ai.models.generateContent({
-              model: modelName,
-              contents: [{ role: 'user', parts: [{ text: fullPrompt }] }]
-            });
-            if (res?.text) return res.text;
-          } catch (err) {
-            lastError = err;
-            const errMsg = err?.message || '';
+    for (const model of modelsToTry) {
+      try {
+        const res = await ai.models.generateContent({
+          model: model,
+          contents: `${systemPrompt}\n\n${userPrompt}`
+        });
 
-            // If temporary 503 high demand or rate limit, wait and retry
-            if (errMsg.includes('503') || err?.status === 'UNAVAILABLE' || errMsg.includes('429')) {
-              await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
-              continue;
-            }
-
-            // If 404 or other non-transient error, move to the next valid model immediately
-            break;
-          }
+        if (res && res.text) {
+          generatedAnswer = res.text;
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+        if (err?.message?.includes('503')) {
+          await new Promise((r) => setTimeout(r, 2000));
         }
       }
-      throw lastError;
     }
+
+    if (!generatedAnswer) {
+      throw lastError || new Error('No models succeeded.');
+    }
+
+    return Response.json({ answer: generatedAnswer });
+  } catch (error) {
+    console.error('Error in MB411 Calendar Assistant:', error);
+    return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
+  }
+}
