@@ -36,7 +36,7 @@ export default function Home() {
     <main style={{ maxWidth: '680px', margin: '40px auto', fontFamily: 'system-ui, sans-serif', padding: '0 16px' }}>
       <header style={{ borderBottom: '1px solid #e2e8f0', paddingBottom: '16px', marginBottom: '24px' }}>
         <h1 style={{ fontSize: '20px', fontWeight: '700', margin: 0 }}>Moses Brown Calendar Assistant</h1>
-        <p style={{ color: '#64748b', fontSize: '14px', margin: '4px 0 0 0' }}>Connected to 3 live school calendar feeds</p>
+        <p style={{ color: '#64748b', fontSize: '14px', margin: '4px 0 0 0' }}></p>
       </header>
 
       <div style={{ minHeight: '360px', maxHeight: '520px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
