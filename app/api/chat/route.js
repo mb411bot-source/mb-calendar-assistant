@@ -6,11 +6,11 @@ import { GoogleGenAI } from '@google/genai';
 
 const FEEDS = [
   {
-    name: 'Feed 1',
+    name: 'Feed 1 (School Events)',
     url: 'https://mosesbrown.myschoolapp.com/podium/feed/iCal.aspx?z=E1N%2bZECWAsAfUGqeWaJ4wnh22O7R2ayGHKshoyBZzraNcPRLE4U8KT9k2M0zhuH2P9%2bDbSna%2foN60549yOti3A%3d%3d'
   },
   {
-    name: 'Feed 2',
+    name: 'Feed 2 (School Events 2)',
     url: 'https://mosesbrown.myschoolapp.com/podium/feed/iCal.aspx?z=KlHNKuuxoXtfzbPFgqNMvxUHicqnjIZL7PNpZ1LKKngZk1Kv6n9LDT%2bnqwQ3TAVKwNBhWCaTgBrM%2b8TVGnztew%3d%3d'
   },
   {
@@ -52,7 +52,6 @@ const cleanCalendarEvents = (events) => {
       const startIso = startDate.toISOString().slice(0, 10);
 
       if (endDate && endDate > startDate) {
-        // Handle all-day inclusive end date
         const inclusiveEndDate = new Date(endDate.getTime() - 1000);
         if (formatDateEastern(startDate) !== formatDateEastern(inclusiveEndDate)) {
           formattedDateRange = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
@@ -110,7 +109,7 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Fetch and parse all 3 feeds
+    // 1. Concurrently fetch all 3 feeds
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -125,24 +124,25 @@ export async function POST(req) {
 
           if (!res.ok) {
             console.error(`Feed fetch error: ${feed.name} returned status ${res.status}`);
-            return [];
+            return { name: feed.name, status: res.status, events: [] };
           }
 
           const rawIcs = await res.text();
-          const events = await ical.async.parseICS(rawIcs);
-          return Object.values(events);
+          const parsed = await ical.async.parseICS(rawIcs);
+          const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
+          return { name: feed.name, status: 200, events };
         } catch (err) {
           console.error(`Fetch failed for ${feed.name}:`, err);
-          return [];
+          return { name: feed.name, status: 'error', error: err.message, events: [] };
         }
       })
     );
 
-    const cleanCalendar1 = cleanCalendarEvents(rawParsedFeeds[0]);
-    const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1]);
-    const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2]);
+    const cleanCalendar1 = cleanCalendarEvents(rawParsedFeeds[0].events);
+    const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
+    const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
 
-    // School Events (Cal 1 & 2) deduplicated
+    // Merge School Events (Cal 1 & 2)
     const schoolEventsMap = new Map();
     [...cleanCalendar1, ...cleanCalendar2].forEach((ev) => {
       const key = `${ev.title}|${ev.startIso}`;
@@ -154,7 +154,7 @@ export async function POST(req) {
       a.startIso.localeCompare(b.startIso)
     );
 
-    // Process Rotating Day Schedule from Calendar Feed 3
+    // Rotating Day Schedule (Cal 3)
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
       .map((event) => ({
@@ -172,6 +172,24 @@ export async function POST(req) {
       kindergartenSubjects: event.subjects
     }));
 
+    // DEBUG COMMAND: If user types "debug", output exact feed metrics immediately
+    if (question.trim().toLowerCase() === 'debug') {
+      const f1Count = cleanCalendar1.length;
+      const f2Count = cleanCalendar2.length;
+      const f3Count = cleanCalendar3.length;
+      const minDate = schoolEvents[0]?.startIso || 'N/A';
+      const maxDate = schoolEvents[schoolEvents.length - 1]?.startIso || 'N/A';
+
+      return Response.json({
+        answer: `**Debug Diagnostics:**\n` +
+          `• Feed 1 Status: ${rawParsedFeeds[0].status} (${f1Count} events)\n` +
+          `• Feed 2 Status: ${rawParsedFeeds[1].status} (${f2Count} events)\n` +
+          `• Feed 3 Status: ${rawParsedFeeds[2].status} (${f3Count} events)\n` +
+          `• Total School Events: ${schoolEvents.length}\n` +
+          `• Date Range Loaded: ${minDate} to ${maxDate}`
+      });
+    }
+
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
     const next7Days = Array.from({ length: 7 }, (_, i) => getEasternDate(i));
@@ -179,32 +197,23 @@ export async function POST(req) {
     const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 RULES:
-
-1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you. Never invent or assume school information.
-
+1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you.
 2. Timezone: Use America/New_York as the local timezone. Correctly interpret relative dates (today, tomorrow, this week, next week, upcoming months).
-
-3. When a parent asks to list events for a specific month (e.g., "November"), list ALL events from the SCHOOL CALENDAR EVENTS list whose date falls within that month in the upcoming school year. Do not claim there are no events if events exist for that month.
-
+3. If the parent asks to list events for a month (e.g. November), search SCHOOL CALENDAR EVENTS for all events in that month and list them clearly with dates.
 4. ROTATING DAY SCHEDULE RULES:
-- Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
-- When a parent asks "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
-- Match the calendar date to the "date" field in CLEAN SCHOOL DAY SCHEDULE and report the "day" from that exact entry.
-- Explicitly identify it as the Kindergarten / Lower School Day number.
-- For Kindergarten subject questions, use the kindergartenSubjects listed for that rotating Day.
-
+   - When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
+   - Report the rotating Day number (Day 1-7) and Kindergarten subjects.
 5. NAMED EVENT LOOKUPS:
-- Search both titles and descriptions in SCHOOL CALENDAR EVENTS.
-- If a named event matches, report its date, time, and location directly from that event.
-- If no matching event exists anywhere in the provided data, say:
+   - Search titles and descriptions in SCHOOL CALENDAR EVENTS.
+   - If an event is found, report its exact date, time, and location.
+   - ONLY if the event does not exist anywhere in the provided calendar data, say:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
-
 6. Keep answers concise, clear, and parent-friendly. Return ONLY the answer to send to the parent.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
 ${question}
 
-CURRENT DATE REFERENCE (America/New_York):
+CURRENT DATE REFERENCE:
 • Today: ${todayEastern.formatted} (${todayEastern.iso})
 • Tomorrow: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 
@@ -220,7 +229,7 @@ ${JSON.stringify(schoolEvents, null, 2)}
 KINDERGARTEN ROTATING DAY SUBJECTS:
 ${JSON.stringify(kindergartenSubjects, null, 2)}
 
-Examine the calendar data carefully. Return only the final answer.`;
+Return only the final answer for the parent.`;
 
     let generatedAnswer = null;
     let lastError = null;
