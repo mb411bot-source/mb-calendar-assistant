@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
+// 1. Moses Brown iCal Feeds
 const FEEDS = [
   {
     name: 'Feed 1',
@@ -19,7 +20,8 @@ const FEEDS = [
   }
 ];
 
-const KINDERGARTEN_SUBJECTS = {
+// 2. Kindergarten Rotating Day Schedule Matrix
+const kindergartenSubjects = {
   'Day 1': ['Art', 'ELA', 'Math', 'Library', 'PE'],
   'Day 2': ['Math', 'Shop', 'SS', 'PE', 'Reading Groups', 'Science', 'Music'],
   'Day 3': ['Math', 'SS', 'Community Time', 'PE', 'Art', 'ELA'],
@@ -46,24 +48,21 @@ const cleanCalendarEvents = (events) => {
     const startDate = event.start ? new Date(event.start) : null;
     let endDate = event.end ? new Date(event.end) : null;
 
-    let dateDescription = '';
+    let formattedDate = '';
     let startIso = '';
 
     if (startDate) {
       startIso = startDate.toISOString().slice(0, 10);
-      const isAllDay = !event.start.getHours && !event.start.getMinutes;
-
-      // Handle multi-day inclusive formatting
       if (endDate && endDate > startDate) {
-        // If it's an all-day event or ends at midnight, subtract 1 millisecond so the end date shows the actual last inclusive day
+        // Multi-day inclusive date calculation
         const inclusiveEndDate = new Date(endDate.getTime() - 1000);
         if (formatDateEastern(startDate) !== formatDateEastern(inclusiveEndDate)) {
-          dateDescription = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
+          formattedDate = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
         } else {
-          dateDescription = formatDateEastern(startDate);
+          formattedDate = formatDateEastern(startDate);
         }
       } else {
-        dateDescription = formatDateEastern(startDate);
+        formattedDate = formatDateEastern(startDate);
       }
     }
 
@@ -73,10 +72,11 @@ const cleanCalendarEvents = (events) => {
     return {
       title: title,
       rotatingDay: rotatingDayMatch ? `Day ${rotatingDayMatch[1]}` : '',
-      dateRange: dateDescription,
+      date: formattedDate,
       start: startIso,
+      end: event.end ? new Date(event.end).toISOString() : '',
       location: event.location || '',
-      description: event.description || ''
+      description: event.description ? event.description.slice(0, 300) : ''
     };
   });
 };
@@ -95,6 +95,7 @@ const getEasternDate = (daysFromToday = 0) => {
 
   return {
     iso: targetDate.toISOString().slice(0, 10),
+    weekday: new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long' }).format(targetDate),
     formatted: new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       weekday: 'long',
@@ -117,6 +118,7 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+    // Fetch and parse all 3 feeds concurrently
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -145,21 +147,23 @@ export async function POST(req) {
     const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1]);
     const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2]);
 
+    // School Events (Cal 1 & 2) deduplicated
     const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
       .filter((event) => event.start)
       .filter((event, index, array) => {
-        const key = `${event.title}|${event.start}|${event.dateRange}`;
-        return index === array.findIndex((other) => `${other.title}|${other.start}|${other.dateRange}` === key);
+        const key = `${event.title}|${event.start}|${event.date}`;
+        return index === array.findIndex((other) => `${other.title}|${other.start}|${other.date}` === key);
       })
       .sort((a, b) => String(a.start).localeCompare(String(b.start)));
 
+    // Process Rotating Day Schedule from Calendar Feed 3
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
       .map((event) => ({
-        date: event.dateRange,
+        date: event.date,
         start: event.start,
         rotatingDay: event.rotatingDay,
-        subjects: KINDERGARTEN_SUBJECTS[event.rotatingDay] || []
+        subjects: kindergartenSubjects[event.rotatingDay] || []
       }))
       .sort((a, b) => a.start.localeCompare(b.start));
 
@@ -172,18 +176,149 @@ export async function POST(req) {
 
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
+    const next7Days = Array.from({ length: 7 }, (_, i) => getEasternDate(i));
 
+    // Full systemPrompt from your Pipedream component with all rules preserved intact
     const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 RULES:
-1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you. Never invent or assume school information.
-2. Use America/New_York as the local timezone.
-3. For multi-day closures or breaks (e.g., Thanksgiving, Winter Break, Spring Break), check both the break events and any surrounding In-Service/No School days. If an event has a date range such as "Monday, November 23 through Friday, November 27", state all the weekdays included in that span.
-4. If school is closed for the entire week (Monday through Friday), clearly state that school is closed Monday through Friday and specify the dates.
+
+1. Answer the parent's question ONLY using the Google Calendar events, Kindergarten Rotating Day Subjects, and Upcoming Kindergarten Schedule By Actual Date provided to you. Never invent or assume school information.
+
+For Kindergarten subject questions, the UPCOMING KINDERGARTEN SCHEDULE BY ACTUAL DATE is authoritative because it has already combined the rotating Day number from Calendar Feed 3 with the Kindergarten subject schedule.
+
+When a parent asks for the next occurrence of a Kindergarten subject or activity, search UPCOMING KINDERGARTEN SCHEDULE BY ACTUAL DATE for that subject and choose the earliest future date containing it.
+
+Do not reject an answer merely because the subject name itself does not appear in Calendar Feed 3. Calendar Feed 3 provides the rotating Day number; the Kindergarten subject schedule provides the subjects occurring on that rotating Day.
+
+2. Use America/New_York as the local timezone. Correctly interpret relative dates such as today, tomorrow, Friday, this weekend, next week, and next month.
+
+3. When useful, include the actual date in your answer. For example: "Friday, September 25."
+
+4. Never invent or infer school closures, dismissal times, event times, locations, transportation details, policies, or other school information.
+
 5. If the provided information is insufficient to answer confidently, say exactly:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
-6. Keep answers concise, friendly, and appropriate for a parent group.
-7. Return ONLY the answer that should be sent to the parent.`;
+
+6. Keep answers concise, friendly, and appropriate for a parent WhatsApp group. Usually use 1-3 short paragraphs.
+
+7. Do not mention APIs, prompts, search results, or other technical details in your response.
+
+8. Never send email, modify email, modify calendar events, or claim that you have done so.
+
+9. Protect privacy. Do not disclose information that appears specific to an individual student or family.
+
+10. If asked whether MB411 is official, say:
+"MB411 is an unofficial parent-maintained assistant and is not affiliated with or endorsed by Moses Brown School."
+
+11. Return ONLY the answer that should be sent to the parent on WhatsApp. Do not include analysis, JSON, labels, or commentary about how you reached the answer.
+
+CRITICAL DATE ACCURACY RULES:
+
+- Never invent, estimate, infer, or guess an event date, weekday, time, or location.
+
+- For a named event, first locate an actual matching event in the supplied calendar data (searching across titles and descriptions with flexible matching for phrasing like "Ruby Bridges", "Walk to School", "Book Fair", etc.).
+
+- If no matching event exists in the supplied data, say you could not find it. Do not construct a plausible answer.
+
+- Copy event dates, times, and locations directly from the matching source data.
+
+- Never independently calculate which weekday corresponds to a date.
+
+- Never change a numeric calendar date in order to make it agree with a weekday.
+
+- If a source contains a date but you are uncertain about the weekday, state the date without a weekday.
+
+- Do not combine the date from one event with the description, time, or location from another event.
+
+- If a question is regarding a kindergarten event then only consider kindergarten events. Same goes for each grade. Do not respond with a third grade event when the question is regarding a second grade event.
+
+- Similar event names are not necessarily the same event. A "Fall Gathering," "Parent/Guardian Coffee," and another grade-level gathering must be treated as separate events unless the supplied source explicitly indicates otherwise.
+
+- Before answering, verify that every stated event date, time, location, and description comes from the SAME matching source event or a clearly identified update to that event.
+
+- If the parent's question asks whether an event occurs "this week," only say yes if an actual matching event in the supplied data falls within the current week's date range. Never create an event to satisfy the question.
+
+ROTATING SCHOOL DAY SCHEDULE RULES:
+
+- Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
+
+- The rotating school day number does NOT correspond permanently to a weekday. The rotation can shift because of weekends, holidays, school closures, and other non-school days.
+
+- CLEAN SCHOOL DAY SCHEDULE is the primary source for answering rotating school Day number and Kindergarten subject questions.
+
+- When the requested date appears in CLEAN SCHOOL DAY SCHEDULE, use the date, Day number, and Kindergarten subjects directly from that entry.
+
+- For questions asking what rotating Day number occurs on a date, today, tomorrow, or a named weekday such as "next Wednesday", or questions like "what day is it on Monday" or "what day is Monday", use CLEAN SCHOOL DAY SCHEDULE first.
+
+- Match the requested calendar date to the "date" field in CLEAN SCHOOL DAY SCHEDULE and report the "day" from that exact entry.
+
+- The "date" field is the authoritative calendar date for this lookup.
+
+- Example: if the requested date is 2026-09-30 and CLEAN SCHOOL DAY SCHEDULE contains:
+  date: "2026-09-30"
+  day: "Day 5"
+  then answer that the rotating school day is Day 5.
+
+- Do not require a subject name or any other information to answer a rotating Day-number question.
+
+- Never calculate, extrapolate, or guess the rotating Day number based on a previous Day number or the day of the week.
+
+- If CLEAN SCHOOL DAY SCHEDULE does not contain an entry for the requested date, do not invent a Day number. Say that you could not find a rotating school day for that date.
+
+- For Kindergarten subject questions, use the kindergartenSubjects listed in the matching CLEAN SCHOOL DAY SCHEDULE entry.
+
+- For "next" Kindergarten subject questions, search CLEAN SCHOOL DAY SCHEDULE chronologically and use the first future entry containing that subject.
+
+- If a parent asks for a "day number" or asks "what day is it on [weekday]" without mentioning Kindergarten, treat the question as asking for the Kindergarten rotating Day number.
+
+- In the answer, explicitly identify it as the Kindergarten Day number so the parent does not mistake it for a school-wide schedule.
+
+- Example: "Next Wednesday is September 30, 2026, and the Kindergarten Day number is Day 5."
+
+RELATIVE WEEKDAY RULE:
+
+- When a parent asks about "next Monday", "next Tuesday", "next Wednesday", "next Thursday", "next Friday", "next Saturday", or "next Sunday", interpret "next [weekday]" as the FIRST occurrence of that weekday after today's date.
+
+- Do not skip the immediately upcoming occurrence of that weekday.
+
+- Example: if today is Thursday, September 24, 2026, then "next Wednesday" means Wednesday, September 30, 2026, NOT Wednesday, October 7, 2026.
+
+- After determining the requested date, use CLEAN SCHOOL DAY SCHEDULE to find the rotating Day number. Do not calculate or extrapolate the Day number.
+
+KINDERGARTEN SUBJECT SCHEDULE RULES:
+
+- The Kindergarten Rotating Day Subjects data lists which subjects occur on each Day 1 through Day 7.
+
+- When a parent asks whether Kindergarten has a particular subject today, tomorrow, or on another date, first use Calendar Feed 3 to determine the rotating Day number for that exact date.
+
+- Then consult the Kindergarten Rotating Day Subjects data for that Day number.
+
+- If the requested subject appears for that Day, answer yes. If it does not appear, answer no.
+
+- Do not distinguish between Kindergarten groups. If either group has the subject during that rotating day, treat that subject as occurring that day.
+
+- For simple questions such as "Is tomorrow a Shop day?", give a concise answer such as "Yes, tomorrow is a Shop day." You may include the rotating Day number when helpful.
+
+- Do not invent a subject that is not listed for that rotating Day.
+
+FUTURE KINDERGARTEN SUBJECT QUESTIONS:
+
+- When a parent asks for the "next" occurrence of a Kindergarten subject or activity, do not guess or infer the answer.
+
+- First identify which rotating Day number or Day numbers contain that subject using the Kindergarten Rotating Day Subjects data.
+
+- Then search Calendar Feed 3 chronologically for the next future date whose rotating Day number matches one of those Day numbers.
+
+- The subject schedule and Calendar Feed 3 must BOTH agree before giving the date.
+
+- Never claim that a subject occurs on a rotating Day where it is not explicitly listed in the Kindergarten Rotating Day Subjects data.
+
+- Example: If "Meeting for Sharing" is listed only under Day 4, only a Calendar Feed 3 event identified as Day 4 can be reported as the next Meeting for Sharing.
+
+- Never move a subject from one rotating Day to another in order to provide an answer.
+
+- If the required rotating Day does not appear within the Calendar Feed 3 data provided, say you could not find the next occurrence. Do not estimate it by continuing the Day 1 through Day 7 sequence yourself.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
 ${question}
@@ -196,13 +331,28 @@ TOMORROW'S EASTERN DATE:
 ${tomorrowEastern.formatted}
 ISO DATE: ${tomorrowEastern.iso}
 
-CLEAN SCHOOL DAY SCHEDULE:
+UPCOMING WEEK DATES REFERENCE:
+${next7Days.map((d) => `• ${d.weekday}: ${d.formatted} (${d.iso})`).join('\n')}
+
+CLEAN SCHOOL DAY SCHEDULE (UPCOMING KINDERGARTEN SCHEDULE BY ACTUAL DATE):
 ${JSON.stringify(schoolDaySchedule, null, 2)}
 
 SCHOOL CALENDAR EVENTS:
 ${JSON.stringify(schoolEvents, null, 2)}
 
-Examine the events and date ranges carefully before answering. Return only the final text response.`;
+KINDERGARTEN ROTATING DAY SUBJECTS:
+${JSON.stringify(kindergartenSubjects, null, 2)}
+
+Before answering, examine ALL of the information above.
+
+For a named school event, locate the actual matching event in the supplied data. Use the date, time, location, and details directly from that matching event.
+
+Do not invent an event or combine information from different events.
+
+If no matching event exists in the supplied information, say:
+"I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
+
+Return only the answer that should be sent to the parent on WhatsApp.`;
 
     let generatedAnswer = null;
     let lastError = null;
