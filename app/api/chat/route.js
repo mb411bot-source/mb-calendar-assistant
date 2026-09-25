@@ -243,7 +243,7 @@ export async function POST(req) {
       kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
     };
 
-    const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
+    const systemPrompt = `You are Moses Bot, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 
