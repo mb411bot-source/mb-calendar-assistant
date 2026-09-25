@@ -29,13 +29,12 @@ const kindergartenSubjects = {
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'SS', 'ELA', 'Spanish']
 };
 
-const formatDateEastern = (d) => {
+const formatTimeEastern = (d) => {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
   }).format(d);
 };
 
@@ -50,6 +49,18 @@ const cleanCalendarEvents = (events) => {
 
       let formattedDateRange = formatDateEastern(startDate);
       const startIso = startDate.toISOString().slice(0, 10);
+
+      // Check if it's an all-day event
+      const isAllDay = !event.start.getHours && !event.start.getMinutes;
+      let timeString = 'All Day';
+
+      if (!isAllDay && event.start.getHours) {
+        if (endDate && endDate > startDate) {
+          timeString = `${formatTimeEastern(startDate)} – ${formatTimeEastern(endDate)}`;
+        } else {
+          timeString = formatTimeEastern(startDate);
+        }
+      }
 
       if (endDate && endDate > startDate) {
         const inclusiveEndDate = new Date(endDate.getTime() - 1000);
@@ -66,8 +77,9 @@ const cleanCalendarEvents = (events) => {
         rotatingDay: rotatingDayMatch ? `Day ${rotatingDayMatch[1]}` : '',
         dateRange: formattedDateRange,
         startIso: startIso,
+        time: timeString,
         location: (event.location || '').trim(),
-        description: (event.description || '').replace(/\s+/g, ' ').slice(0, 250)
+        description: (event.description || '').replace(/\s+/g, ' ').slice(0, 300)
       };
     });
 };
@@ -230,7 +242,8 @@ RULES:
    - Report the rotating Day number (Day 1-7) and Kindergarten subjects.
 5. NAMED EVENT LOOKUPS:
    - Search titles and descriptions in SCHOOL CALENDAR EVENTS.
-   - If an event is found, report its exact date, time, and location.
+   - Whenever an event is found, ALWAYS include the exact date, time (unless marked "All Day"), and location in your response.
+   - For example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
    - ONLY if the event does not exist anywhere in the provided calendar data, say:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
 6. Keep answers concise, clear, and parent-friendly. Return ONLY the answer to send to the parent.`;
