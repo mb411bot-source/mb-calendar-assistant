@@ -1,9 +1,11 @@
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// The 3 Moses Brown School Feeds
 const FEEDS = [
   {
     name: 'Moses Brown Feed 1',
@@ -23,7 +25,6 @@ export async function POST(req) {
   try {
     const { question } = await req.json();
 
-    // 1. Fetch & parse feeds concurrently
     const parsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -35,8 +36,7 @@ export async function POST(req) {
               summary: e.summary || 'Untitled Event',
               start: e.start ? new Date(e.start).toISOString() : null,
               end: e.end ? new Date(e.end).toISOString() : null,
-              location: e.location || 'Campus / Unspecified',
-              description: e.description ? e.description.slice(0, 150) : ''
+              location: e.location || 'Campus / Unspecified'
             }));
         } catch (err) {
           console.error(`Fetch failed for ${feed.name}:`, err);
@@ -45,23 +45,20 @@ export async function POST(req) {
       })
     );
 
-    // 2. Flatten and sort chronologically
     const allEvents = parsedFeeds
       .flat()
       .filter((e) => e.start)
       .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-    // 3. Compact text digest for context window
     const now = new Date().toISOString();
     const digest = allEvents.map((e) =>
-      `• [${e.feed}] ${e.summary} | Start: ${e.start} | End: ${e.end} | Loc: ${e.location}${e.description ? ` | Note: ${e.description}` : ''}`
+      `• [${e.feed}] ${e.summary} | Start: ${e.start} | End: ${e.end} | Loc: ${e.location}`
     ).join('\n');
 
-    // 4. Send to Gemini 2.5 Flash
     const prompt = `You are a helpful school calendar assistant for Moses Brown School.
 Current reference timestamp: ${now}
 
-Calendar Data Across 3 Feeds:
+Calendar Data:
 ${digest}
 
 User Question: ${question}
