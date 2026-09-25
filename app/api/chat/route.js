@@ -31,7 +31,6 @@ const kindergartenSubjects = {
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'SS', 'ELA', 'Spanish']
 };
 
-// Formatter Helpers
 const formatDateEastern = (d) => {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
@@ -51,14 +50,24 @@ const formatTimeEastern = (d) => {
   }).format(d);
 };
 
-// Accurate Eastern Date String: YYYY-MM-DD
-const getEasternIsoDate = (d) => {
+// Accurately extracts YYYY-MM-DD preserving calendar dates without timezone skew
+const extractIsoDate = (dateVal) => {
+  if (!dateVal) return '';
+  if (typeof dateVal === 'string') {
+    const match = dateVal.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+  const d = new Date(dateVal);
+  // For all-day events at midnight UTC, format using UTC so 2026-09-28 doesn't become 2026-09-27 in EDT
+  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+    return d.toISOString().slice(0, 10);
+  }
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
-  }).format(new Date(d));
+  }).format(d);
 };
 
 const cleanCalendarEvents = (events) => {
@@ -70,12 +79,15 @@ const cleanCalendarEvents = (events) => {
       const startDate = new Date(event.start);
       const endDate = event.end ? new Date(event.end) : null;
 
-      const startIso = getEasternIsoDate(startDate);
-      let formattedDateRange = formatDateEastern(startDate);
-
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
-      let timeString = 'All Day';
+      const startIso = extractIsoDate(event.start);
 
+      // Create noon anchor for displaying formatted date
+      const [year, month, day] = startIso.split('-').map(Number);
+      const displayDate = new Date(Date.UTC(year, month - 1, day, 16));
+      let formattedDateRange = formatDateEastern(displayDate);
+
+      let timeString = 'All Day';
       if (!isAllDay && typeof event.start.getHours === 'function') {
         if (endDate && endDate > startDate) {
           timeString = `${formatTimeEastern(startDate)} – ${formatTimeEastern(endDate)}`;
@@ -85,14 +97,11 @@ const cleanCalendarEvents = (events) => {
       }
 
       if (endDate && endDate > startDate) {
-        // Subtract 60s to handle exclusive midnight end-dates
-        const inclusiveEndDate = new Date(endDate.getTime() - 60000);
-        const endIso = getEasternIsoDate(inclusiveEndDate);
-
+        const endIso = extractIsoDate(new Date(endDate.getTime() - 60000));
         if (startIso !== endIso) {
-          formattedDateRange = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
-        } else {
-          formattedDateRange = formatDateEastern(startDate);
+          const [ey, em, ed] = endIso.split('-').map(Number);
+          const endDisplayDate = new Date(Date.UTC(ey, em - 1, ed, 16));
+          formattedDateRange = `${formatDateEastern(displayDate)} through ${formatDateEastern(endDisplayDate)}`;
         }
       }
 
@@ -121,7 +130,7 @@ const getEasternDate = (daysFromToday = 0) => {
   }).format(now);
 
   const [year, month, day] = easternDateString.split('-').map(Number);
-  const targetDate = new Date(Date.UTC(year, month - 1, day + daysFromToday, 12));
+  const targetDate = new Date(Date.UTC(year, month - 1, day + daysFromToday, 16));
 
   return {
     iso: targetDate.toISOString().slice(0, 10),
@@ -196,16 +205,12 @@ export async function POST(req) {
     // Rotating Day Schedule (Cal 3)
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
-      .map((event) => {
-        const [year, month, day] = event.startIso.split('-').map(Number);
-        const localNoon = new Date(Date.UTC(year, month - 1, day, 16));
-        return {
-          date: formatDateEastern(localNoon),
-          isoDate: event.startIso,
-          rotatingDay: event.rotatingDay,
-          subjects: kindergartenSubjects[event.rotatingDay] || []
-        };
-      })
+      .map((event) => ({
+        date: event.dateRange,
+        isoDate: event.startIso,
+        rotatingDay: event.rotatingDay,
+        subjects: kindergartenSubjects[event.rotatingDay] || []
+      }))
       .sort((a, b) => a.isoDate.localeCompare(b.isoDate));
 
     const schoolDaySchedule = kindergartenUpcomingSchedule.map((event) => ({
@@ -263,9 +268,9 @@ CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 4. ROTATING DAY SCHEDULE & KINDERGARTEN SUBJECTS:
 - Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
 - When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
-- Report the rotating Day number (Day 1-7) and explicitly identify it as the Kindergarten / Lower School Day number.
+- Match the date to the exact "date" field in CLEAN SCHOOL DAY SCHEDULE. Report the rotating Day number (Day 1-7) and explicitly identify it as the Kindergarten / Lower School Day number.
 - For Kindergarten subject questions, use the kindergartenSubjects listed for that rotating Day.
-- Rotating days are single school days. Report them as the single calendar date (e.g., "Tuesday, September 29, 2026"), never as a date range.
+- Rotating days are single school days. Report them as the single calendar date (e.g., "Monday, September 28, 2026"), never as a date range.
 - For questions asking about "Sharing Day" or "Meeting for Sharing", search CLEAN SCHOOL DAY SCHEDULE for the next date where the rotating day subjects include "Meeting for Sharing" (which occurs on Day 4).
 - For questions asking about "Meeting for Business", search for the next date that includes "Meeting for Business" (which occurs on Day 7).
 
