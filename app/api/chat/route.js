@@ -172,8 +172,10 @@ export async function POST(req) {
       kindergartenSubjects: event.subjects
     }));
 
-    // DEBUG COMMAND: If user types "debug", output exact feed metrics immediately
-    if (question.trim().toLowerCase() === 'debug') {
+    const qLower = question.trim().toLowerCase();
+
+    // 1. Diagnostics command
+    if (qLower === 'debug') {
       const f1Count = cleanCalendar1.length;
       const f2Count = cleanCalendar2.length;
       const f3Count = cleanCalendar3.length;
@@ -188,6 +190,29 @@ export async function POST(req) {
           `• Total School Events: ${schoolEvents.length}\n` +
           `• Date Range Loaded: ${minDate} to ${maxDate}`
       });
+    }
+
+    // 2. Direct November Inspection (bypasses LLM fallback to verify data)
+    if (qLower === 'debug nov' || qLower === 'debug november') {
+      const novEvents = schoolEvents.filter(e => e.startIso && e.startIso.startsWith('2026-11'));
+      if (novEvents.length === 0) {
+        return Response.json({ answer: 'There are ZERO events in the calendar data with start dates in 2026-11.' });
+      }
+      const list = novEvents.map(e => `• **${e.startIso}** (${e.dateRange}): ${e.title} ${e.location ? `[@ ${e.location}]` : ''}`).join('\n');
+      return Response.json({ answer: `**Found ${novEvents.length} events in November 2026:**\n\n${list}` });
+    }
+
+    // 3. Direct Ruby / Walk Search (bypasses LLM fallback to verify data)
+    if (qLower === 'debug walk' || qLower === 'debug ruby') {
+      const matches = schoolEvents.filter(e => 
+        (e.title + ' ' + e.description).toLowerCase().includes('ruby') || 
+        (e.title + ' ' + e.description).toLowerCase().includes('walk')
+      );
+      if (matches.length === 0) {
+        return Response.json({ answer: 'Zero events containing "ruby" or "walk" were found across all 446 calendar events.' });
+      }
+      const list = matches.map(e => `• **${e.startIso}**: ${e.title}`).join('\n');
+      return Response.json({ answer: `**Matches found in raw feed:**\n\n${list}` });
     }
 
     const todayEastern = getEasternDate(0);
