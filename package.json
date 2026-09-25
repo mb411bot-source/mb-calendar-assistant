@@ -1,6 +1,6 @@
 {
-  "name": "mb-calendar-assistant",
-  "version": "1.0.0",
+  "name": "mob-calendar-assistant",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,10 +8,11 @@
     "start": "next start"
   },
   "dependencies": {
-    "@google/genai": "latest",
-    "next": "14.2.15",
-    "node-ical": "^0.18.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@google/genai": "^0.1.1",
+    "googleapis": "^144.0.0",
+    "next": "15.1.0",
+    "node-ical": "^0.20.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }
