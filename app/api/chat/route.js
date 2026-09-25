@@ -262,18 +262,17 @@ ${JSON.stringify(schoolEvents, null, 2)}
 Before answering, examine ALL of the information above.
 Return only the answer to send to the parent.`;
 
-   // Helper function to query Gemini with retry & fallback models on 503
+  // Helper function to query Gemini with retry on active 3.x models
     async function callGeminiWithFallback(fullPrompt) {
       const modelsToTry = [
         'gemini-3.8-flash',
-        'gemini-3.8-flash-lite',
-        'gemini-2.0-flash'
+        'gemini-3.8-flash-lite'
       ];
 
       let lastError = null;
 
       for (const modelName of modelsToTry) {
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
           try {
             const res = await ai.models.generateContent({
               model: modelName,
@@ -282,25 +281,18 @@ Return only the answer to send to the parent.`;
             if (res?.text) return res.text;
           } catch (err) {
             lastError = err;
-            // If it's a 503 high demand error, pause briefly and retry or fall back to the next model
-            if (err?.message?.includes('503') || err?.status === 'UNAVAILABLE') {
-              await new Promise((resolve) => setTimeout(resolve, 1000));
+            const errMsg = err?.message || '';
+
+            // If temporary 503 high demand or rate limit, wait and retry
+            if (errMsg.includes('503') || err?.status === 'UNAVAILABLE' || errMsg.includes('429')) {
+              await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
               continue;
             }
-            // For other non-transient errors, break to next model
+
+            // If 404 or other non-transient error, move to the next valid model immediately
             break;
           }
         }
       }
       throw lastError;
     }
-
-    const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
-    const generatedAnswer = await callGeminiWithFallback(fullPrompt);
-
-    return Response.json({ answer: generatedAnswer });
-  } catch (error) {
-    console.error('Error in MB411 Calendar Assistant:', error);
-    return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
-  }
-}
