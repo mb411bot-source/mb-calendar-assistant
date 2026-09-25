@@ -85,7 +85,7 @@ const cleanCalendarEvents = (events) => {
       }
 
       if (endDate && endDate > startDate) {
-        // Only treat as multi-day if start date and inclusive end date differ in Eastern time
+        // Subtract 60s to handle exclusive midnight end-dates
         const inclusiveEndDate = new Date(endDate.getTime() - 60000);
         const endIso = getEasternIsoDate(inclusiveEndDate);
 
@@ -238,7 +238,7 @@ export async function POST(req) {
       kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
     };
 
-const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
+    const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 
@@ -285,7 +285,7 @@ ${question}
 TODAY GROUND TRUTH STATUS:
 ${JSON.stringify(todayStatusInfo, null, 2)}
 
-CURRENT DATE REFERENCE:
+CURRENT DATE REFERENCE (America/New_York):
 • Today: ${todayEastern.formatted} (${todayEastern.iso}) - ${todayEastern.weekday}
 • Tomorrow: ${tomorrowEastern.formatted} (${tomorrowEastern.iso}) - ${tomorrowEastern.weekday}
 
@@ -297,6 +297,9 @@ ${JSON.stringify(schoolDaySchedule, null, 2)}
 
 SCHOOL CALENDAR EVENTS:
 ${JSON.stringify(schoolEvents, null, 2)}
+
+KINDERGARTEN ROTATING DAY SUBJECTS:
+${JSON.stringify(kindergartenSubjects, null, 2)}
 
 Return only the final answer for the parent.`;
 
@@ -339,5 +342,4 @@ Return only the final answer for the parent.`;
     console.error('Error in MB411 Calendar Assistant:', error);
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
   }
-}
 }
