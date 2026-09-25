@@ -3,7 +3,6 @@ export const dynamic = 'force-dynamic';
 
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
-import { gmail, auth } from '@googleapis/gmail';
 
 // 1. Moses Brown iCal Feeds
 const FEEDS = [
@@ -59,6 +58,7 @@ const extractIsoDate = (dateVal) => {
     if (match) return `${match[1]}-${match[2]}-${match[3]}`;
   }
   const d = new Date(dateVal);
+  // For all-day events at midnight UTC, format using UTC so 2026-09-28 doesn't become 2026-09-27 in EDT
   if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
     return d.toISOString().slice(0, 10);
   }
@@ -82,6 +82,7 @@ const cleanCalendarEvents = (events) => {
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
       const startIso = extractIsoDate(event.start);
 
+      // Create noon anchor for displaying formatted date
       const [year, month, day] = startIso.split('-').map(Number);
       const displayDate = new Date(Date.UTC(year, month - 1, day, 16));
       let formattedDateRange = formatDateEastern(displayDate);
@@ -144,70 +145,6 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
-// --- GMAIL FETCHER FUNCTION ---
-async function fetchRecentSchoolEmails() {
-  if (
-    !process.env.GMAIL_CLIENT_ID ||
-    !process.env.GMAIL_CLIENT_SECRET ||
-    !process.env.GMAIL_REFRESH_TOKEN
-  ) {
-    return [];
-  }
-
-  try {
-    const oauth2Client = new auth.OAuth2(
-      process.env.GMAIL_CLIENT_ID,
-      process.env.GMAIL_CLIENT_SECRET
-    );
-    oauth2Client.setCredentials({
-      refresh_token: process.env.GMAIL_REFRESH_TOKEN
-    });
-
-    const gmailClient = gmail({ version: 'v1', auth: oauth2Client });
-
-    const listRes = await gmailClient.users.messages.list({
-      userId: 'me',
-      maxResults: 8
-    });
-
-    const messages = listRes.data.messages || [];
-    if (messages.length === 0) return [];
-
-    const detailedEmails = await Promise.all(
-      messages.map(async (msg) => {
-        try {
-          const detail = await gmailClient.users.messages.get({
-            userId: 'me',
-            id: msg.id,
-            format: 'metadata',
-            metadataHeaders: ['Subject', 'Date', 'From']
-          });
-
-          const headers = detail.data.payload?.headers || [];
-          const subject = headers.find((h) => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
-          const date = headers.find((h) => h.name?.toLowerCase() === 'date')?.value || '';
-          const from = headers.find((h) => h.name?.toLowerCase() === 'from')?.value || '';
-          const snippet = detail.data.snippet || '';
-
-          return {
-            subject,
-            date,
-            from,
-            snippet
-          };
-        } catch {
-          return null;
-        }
-      })
-    );
-
-    return detailedEmails.filter(Boolean);
-  } catch (err) {
-    console.error('Failed to fetch Gmail results:', err);
-    return [];
-  }
-}
-
 export async function POST(req) {
   try {
     const { question } = await req.json();
@@ -220,37 +157,34 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Fetch calendar feeds and Gmail concurrently
-    const [rawParsedFeeds, gmailResults] = await Promise.all([
-      Promise.all(
-        FEEDS.map(async (feed) => {
-          try {
-            const res = await fetch(feed.url, {
-              headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                Accept: 'text/calendar, text/plain, */*'
-              },
-              cache: 'no-store'
-            });
+    // Fetch and parse all 3 feeds
+    const rawParsedFeeds = await Promise.all(
+      FEEDS.map(async (feed) => {
+        try {
+          const res = await fetch(feed.url, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              Accept: 'text/calendar, text/plain, */*'
+            },
+            cache: 'no-store'
+          });
 
-            if (!res.ok) {
-              console.error(`Feed fetch error: ${feed.name} returned status ${res.status}`);
-              return { name: feed.name, status: res.status, events: [] };
-            }
-
-            const rawIcs = await res.text();
-            const parsed = await ical.async.parseICS(rawIcs);
-            const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
-            return { name: feed.name, status: 200, events };
-          } catch (err) {
-            console.error(`Fetch failed for ${feed.name}:`, err);
-            return { name: feed.name, status: 'error', error: err.message, events: [] };
+          if (!res.ok) {
+            console.error(`Feed fetch error: ${feed.name} returned status ${res.status}`);
+            return { name: feed.name, status: res.status, events: [] };
           }
-        })
-      ),
-      fetchRecentSchoolEmails()
-    ]);
+
+          const rawIcs = await res.text();
+          const parsed = await ical.async.parseICS(rawIcs);
+          const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
+          return { name: feed.name, status: 200, events };
+        } catch (err) {
+          console.error(`Fetch failed for ${feed.name}:`, err);
+          return { name: feed.name, status: 'error', error: err.message, events: [] };
+        }
+      })
+    );
 
     const cleanCalendar1 = cleanCalendarEvents(rawParsedFeeds[0].events);
     const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
@@ -309,14 +243,14 @@ export async function POST(req) {
       kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
     };
 
-    const systemPrompt = `You are Mo B Calendar Assistant, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
+    const systemPrompt = `You are Moses Bot, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 
 1. SOURCE OF TRUTH:
-- Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, TODAY GROUND TRUTH STATUS, RECENT SCHOOL EMAILS, and Kindergarten Rotating Day Subjects provided to you.
+- Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, TODAY GROUND TRUTH STATUS, and Kindergarten Rotating Day Subjects provided to you.
 - Never invent, extrapolate, or assume school information.
-- If the requested information genuinely does not exist anywhere in the provided calendar, schedule, or email data, say exactly:
+- If the requested information genuinely does not exist anywhere in the provided calendar or schedule data, say exactly:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
 
 2. TIMEZONE & RELATIVE DATES:
@@ -340,11 +274,10 @@ CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 - For questions asking about "Sharing Day" or "Meeting for Sharing", search CLEAN SCHOOL DAY SCHEDULE for the next date where the rotating day subjects include "Meeting for Sharing" (which occurs on Day 4).
 - For questions asking about "Meeting for Business", search for the next date that includes "Meeting for Business" (which occurs on Day 7).
 
-5. NAMED EVENT LOOKUPS & EMAILS:
-- Search titles and descriptions in SCHOOL CALENDAR EVENTS, as well as RECENT SCHOOL EMAILS.
+5. NAMED EVENT LOOKUPS:
+- Search both titles and descriptions in SCHOOL CALENDAR EVENTS.
 - Whenever an event is found, ALWAYS include the exact date, start/end time (unless marked "All Day"), and location in your response.
 - Example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
-- If answering from an email announcement, cite the email subject and date.
 - When a parent asks to list events for a specific month (e.g., "November"), list ALL events from the SCHOOL CALENDAR EVENTS list whose date falls within that month in the upcoming school year.
 
 6. OUTPUT FORMAT:
@@ -369,9 +302,6 @@ ${JSON.stringify(schoolDaySchedule, null, 2)}
 
 SCHOOL CALENDAR EVENTS:
 ${JSON.stringify(schoolEvents, null, 2)}
-
-RECENT SCHOOL EMAILS:
-${JSON.stringify(gmailResults, null, 2)}
 
 KINDERGARTEN ROTATING DAY SUBJECTS:
 ${JSON.stringify(kindergartenSubjects, null, 2)}
@@ -414,7 +344,7 @@ Return only the final answer for the parent.`;
 
     return Response.json({ answer: generatedAnswer });
   } catch (error) {
-    console.error('Error in Mo B Calendar Assistant:', error);
+    console.error('Error in MB411 Calendar Assistant:', error);
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
   }
 }
