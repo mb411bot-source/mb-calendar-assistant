@@ -3,7 +3,7 @@ import { useState } from 'react';
 
 export default function Home() {
   const [messages, setMessages] = useState([
-    { sender: 'bot', text: 'Hello Friend! Ask me anything about the Moses Brown School calendar.' }
+    { sender: 'bot', text: 'Hello Friend! Ask me anything about calendars and scheduling.' }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
