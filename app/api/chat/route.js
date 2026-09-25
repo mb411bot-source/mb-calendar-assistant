@@ -265,26 +265,39 @@ Return only the answer to send to the parent.`;
     let generatedAnswer = null;
     let lastError = null;
 
-    // Use current active models
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    // Use current Gemini 3-series models supported on v1beta
+    const modelsToTry = [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite'
+    ];
 
     for (const model of modelsToTry) {
-      try {
-        const res = await ai.models.generateContent({
-          model: model,
-          contents: `${systemPrompt}\n\n${userPrompt}`
-        });
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const res = await ai.models.generateContent({
+            model: model,
+            contents: `${systemPrompt}\n\n${userPrompt}`
+          });
 
-        if (res && res.text) {
-          generatedAnswer = res.text;
+          if (res?.text) {
+            generatedAnswer = res.text;
+            break;
+          }
+        } catch (err) {
+          lastError = err;
+          const msg = err?.message || '';
+
+          // If temporary high demand (503) or rate limit (429), wait and retry
+          if (msg.includes('503') || msg.includes('429') || err?.status === 'UNAVAILABLE') {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          // If not transient, skip to next model
           break;
         }
-      } catch (err) {
-        lastError = err;
-        if (err?.message?.includes('503')) {
-          await new Promise((r) => setTimeout(r, 2000));
-        }
       }
+      if (generatedAnswer) break;
     }
 
     if (!generatedAnswer) {
@@ -292,8 +305,3 @@ Return only the answer to send to the parent.`;
     }
 
     return Response.json({ answer: generatedAnswer });
-  } catch (error) {
-    console.error('Error in MB411 Calendar Assistant:', error);
-    return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
-  }
-}
