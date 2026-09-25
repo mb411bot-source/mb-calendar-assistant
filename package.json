@@ -1,5 +1,5 @@
 {
-  "name": "mob-calendar-assistant",
+  "name": "mb-calendar-assistant",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@google/genai": "^0.1.1",
-    "googleapis": "^144.0.0",
+    "@googleapis/gmail": "^2.0.0",
     "next": "15.1.0",
     "node-ical": "^0.20.1",
     "react": "^19.0.0",
