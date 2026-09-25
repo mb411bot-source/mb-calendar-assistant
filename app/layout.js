@@ -1,4 +1,4 @@
-export const metadata = { title: 'Mo B Calendar Assistant' };
+export const metadata = { title: 'Moses Bot' };
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
