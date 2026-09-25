@@ -263,7 +263,7 @@ Before answering, examine ALL of the information above.
 Return only the answer to send to the parent.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       contents: [
         { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }
       ]
