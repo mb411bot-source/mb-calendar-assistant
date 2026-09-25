@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
+// 1. Moses Brown iCal Feeds
 const FEEDS = [
   {
     name: 'Feed 1 (School Events)',
@@ -19,6 +20,7 @@ const FEEDS = [
   }
 ];
 
+// 2. Kindergarten Rotating Day Schedule Matrix
 const kindergartenSubjects = {
   'Day 1': ['Art', 'ELA', 'Math', 'Library', 'PE'],
   'Day 2': ['Math', 'Shop', 'SS', 'PE', 'Reading Groups', 'Science', 'Music'],
@@ -27,6 +29,17 @@ const kindergartenSubjects = {
   'Day 5': ['ELA', 'Art', 'Math', 'SS', 'Library', 'Spanish'],
   'Day 6': ['Tech', 'Math', 'Reading Groups', 'PE', 'SS', 'Music', 'Art', 'ELA'],
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'SS', 'ELA', 'Spanish']
+};
+
+// Formatter Helpers
+const formatDateEastern = (d) => {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(d);
 };
 
 const formatTimeEastern = (d) => {
@@ -50,11 +63,11 @@ const cleanCalendarEvents = (events) => {
       let formattedDateRange = formatDateEastern(startDate);
       const startIso = startDate.toISOString().slice(0, 10);
 
-      // Check if it's an all-day event
+      // Determine all-day vs timed
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
       let timeString = 'All Day';
 
-      if (!isAllDay && event.start.getHours) {
+      if (!isAllDay && typeof event.start.getHours === 'function') {
         if (endDate && endDate > startDate) {
           timeString = `${formatTimeEastern(startDate)} – ${formatTimeEastern(endDate)}`;
         } else {
@@ -121,7 +134,7 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // 1. Concurrently fetch all 3 feeds
+    // Fetch and parse all 3 feeds
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -184,49 +197,6 @@ export async function POST(req) {
       kindergartenSubjects: event.subjects
     }));
 
-    const qLower = question.trim().toLowerCase();
-
-    // 1. Diagnostics command
-    if (qLower === 'debug') {
-      const f1Count = cleanCalendar1.length;
-      const f2Count = cleanCalendar2.length;
-      const f3Count = cleanCalendar3.length;
-      const minDate = schoolEvents[0]?.startIso || 'N/A';
-      const maxDate = schoolEvents[schoolEvents.length - 1]?.startIso || 'N/A';
-
-      return Response.json({
-        answer: `**Debug Diagnostics:**\n` +
-          `• Feed 1 Status: ${rawParsedFeeds[0].status} (${f1Count} events)\n` +
-          `• Feed 2 Status: ${rawParsedFeeds[1].status} (${f2Count} events)\n` +
-          `• Feed 3 Status: ${rawParsedFeeds[2].status} (${f3Count} events)\n` +
-          `• Total School Events: ${schoolEvents.length}\n` +
-          `• Date Range Loaded: ${minDate} to ${maxDate}`
-      });
-    }
-
-    // 2. Direct November Inspection (bypasses LLM fallback to verify data)
-    if (qLower === 'debug nov' || qLower === 'debug november') {
-      const novEvents = schoolEvents.filter(e => e.startIso && e.startIso.startsWith('2026-11'));
-      if (novEvents.length === 0) {
-        return Response.json({ answer: 'There are ZERO events in the calendar data with start dates in 2026-11.' });
-      }
-      const list = novEvents.map(e => `• **${e.startIso}** (${e.dateRange}): ${e.title} ${e.location ? `[@ ${e.location}]` : ''}`).join('\n');
-      return Response.json({ answer: `**Found ${novEvents.length} events in November 2026:**\n\n${list}` });
-    }
-
-    // 3. Direct Ruby / Walk Search (bypasses LLM fallback to verify data)
-    if (qLower === 'debug walk' || qLower === 'debug ruby') {
-      const matches = schoolEvents.filter(e => 
-        (e.title + ' ' + e.description).toLowerCase().includes('ruby') || 
-        (e.title + ' ' + e.description).toLowerCase().includes('walk')
-      );
-      if (matches.length === 0) {
-        return Response.json({ answer: 'Zero events containing "ruby" or "walk" were found across all 446 calendar events.' });
-      }
-      const list = matches.map(e => `• **${e.startIso}**: ${e.title}`).join('\n');
-      return Response.json({ answer: `**Matches found in raw feed:**\n\n${list}` });
-    }
-
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
     const next7Days = Array.from({ length: 7 }, (_, i) => getEasternDate(i));
@@ -234,31 +204,39 @@ export async function POST(req) {
     const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 RULES:
-1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you.
+
+1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you. Never invent or assume school information.
+
 2. Timezone: Use America/New_York as the local timezone. Correctly interpret relative dates (today, tomorrow, this week, next week, upcoming months).
-3. If the parent asks to list events for a month (e.g. November), search SCHOOL CALENDAR EVENTS for all events in that month and list them clearly with dates.
-4. ROTATING DAY SCHEDULE RULES:
-   - When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
-   - Report the rotating Day number (Day 1-7) and Kindergarten subjects.
-5. NAMED EVENT LOOKUPS:
-   - Search titles and descriptions in SCHOOL CALENDAR EVENTS.
-   - Whenever an event is found, ALWAYS include the exact date, time (unless marked "All Day"), and location in your response.
-   - For example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
-   - ONLY if the event does not exist anywhere in the provided calendar data, say:
+
+3. NAMED EVENT LOOKUPS:
+- Search both titles and descriptions in SCHOOL CALENDAR EVENTS.
+- Whenever an event is found, ALWAYS include the exact date, time (unless marked "All Day"), and location in your response.
+- Example: "The Ruby Bridges Walk to School Day is scheduled for Friday, November 13, 2026, from 7:45 AM – 8:15 AM at Campanella."
+
+4. ROTATING DAY SCHEDULE & KINDERGARTEN SUBJECTS:
+- Google Calendar Feed 3 contains the authoritative rotating Day 1 through Day 7 school schedule.
+- When asked "what day is it on Monday", "what day is tomorrow", or for a specific date, look up the date in CLEAN SCHOOL DAY SCHEDULE.
+- Report the rotating Day number (Day 1-7) and Kindergarten subjects.
+- For questions asking about "Sharing Day" or "Meeting for Sharing", search CLEAN SCHOOL DAY SCHEDULE for the next date where the rotating day subjects include "Meeting for Sharing" (which occurs on Day 4).
+- For questions asking about "Meeting for Business", search for the next date that includes "Meeting for Business" (which occurs on Day 7).
+
+5. If the requested information genuinely does not exist anywhere in the provided calendar data, say:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
+
 6. Keep answers concise, clear, and parent-friendly. Return ONLY the answer to send to the parent.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
 ${question}
 
-CURRENT DATE REFERENCE:
+CURRENT DATE REFERENCE (America/New_York):
 • Today: ${todayEastern.formatted} (${todayEastern.iso})
 • Tomorrow: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 
 UPCOMING WEEK DATES:
 ${next7Days.map((d) => `• ${d.weekday}: ${d.formatted} (${d.iso})`).join('\n')}
 
-CLEAN SCHOOL DAY SCHEDULE (ROTATING DAY 1-7):
+CLEAN SCHOOL DAY SCHEDULE (ROTATING DAY 1-7 & KINDERGARTEN SUBJECTS):
 ${JSON.stringify(schoolDaySchedule, null, 2)}
 
 SCHOOL CALENDAR EVENTS:
@@ -267,7 +245,7 @@ ${JSON.stringify(schoolEvents, null, 2)}
 KINDERGARTEN ROTATING DAY SUBJECTS:
 ${JSON.stringify(kindergartenSubjects, null, 2)}
 
-Return only the final answer for the parent.`;
+Examine the schedule and calendar data. Return only the final answer for the parent.`;
 
     let generatedAnswer = null;
     let lastError = null;
