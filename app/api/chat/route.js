@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
-// 1. Moses Brown iCal Feeds
 const FEEDS = [
   {
     name: 'Feed 1',
@@ -20,7 +19,6 @@ const FEEDS = [
   }
 ];
 
-// 2. Kindergarten Rotating Day Schedule Matrix
 const KINDERGARTEN_SUBJECTS = {
   'Day 1': ['Art', 'ELA', 'Math', 'Library', 'PE'],
   'Day 2': ['Math', 'Shop', 'SS', 'PE', 'Reading Groups', 'Science', 'Music'],
@@ -31,23 +29,42 @@ const KINDERGARTEN_SUBJECTS = {
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'SS', 'ELA', 'Spanish']
 };
 
+const formatDateEastern = (d) => {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(d);
+};
+
 const cleanCalendarEvents = (events) => {
   if (!Array.isArray(events)) return [];
 
   return events.map((event) => {
-    const startValue = event.start ? new Date(event.start).toISOString() : '';
-    const endValue = event.end ? new Date(event.end).toISOString() : '';
+    const startDate = event.start ? new Date(event.start) : null;
+    let endDate = event.end ? new Date(event.end) : null;
 
-    let formattedDate = '';
-    if (startValue) {
-      const dateForFormatting = new Date(startValue);
-      formattedDate = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric'
-      }).format(dateForFormatting);
+    let dateDescription = '';
+    let startIso = '';
+
+    if (startDate) {
+      startIso = startDate.toISOString().slice(0, 10);
+      const isAllDay = !event.start.getHours && !event.start.getMinutes;
+
+      // Handle multi-day inclusive formatting
+      if (endDate && endDate > startDate) {
+        // If it's an all-day event or ends at midnight, subtract 1 millisecond so the end date shows the actual last inclusive day
+        const inclusiveEndDate = new Date(endDate.getTime() - 1000);
+        if (formatDateEastern(startDate) !== formatDateEastern(inclusiveEndDate)) {
+          dateDescription = `${formatDateEastern(startDate)} through ${formatDateEastern(inclusiveEndDate)}`;
+        } else {
+          dateDescription = formatDateEastern(startDate);
+        }
+      } else {
+        dateDescription = formatDateEastern(startDate);
+      }
     }
 
     const title = event.summary || '';
@@ -56,9 +73,8 @@ const cleanCalendarEvents = (events) => {
     return {
       title: title,
       rotatingDay: rotatingDayMatch ? `Day ${rotatingDayMatch[1]}` : '',
-      date: formattedDate,
-      start: startValue.slice(0, 10),
-      end: endValue,
+      dateRange: dateDescription,
+      start: startIso,
       location: event.location || '',
       description: event.description || ''
     };
@@ -101,7 +117,6 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Fetch and parse all 3 feeds concurrently
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -114,10 +129,7 @@ export async function POST(req) {
             cache: 'no-store'
           });
 
-          if (!res.ok) {
-            console.error(`Feed ${feed.name} returned status ${res.status}`);
-            return [];
-          }
+          if (!res.ok) return [];
 
           const rawIcs = await res.text();
           const events = await ical.async.parseICS(rawIcs);
@@ -136,15 +148,15 @@ export async function POST(req) {
     const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
       .filter((event) => event.start)
       .filter((event, index, array) => {
-        const key = `${event.title}|${event.start}`;
-        return index === array.findIndex((other) => `${other.title}|${other.start}` === key);
+        const key = `${event.title}|${event.start}|${event.dateRange}`;
+        return index === array.findIndex((other) => `${other.title}|${other.start}|${other.dateRange}` === key);
       })
       .sort((a, b) => String(a.start).localeCompare(String(b.start)));
 
     const kindergartenUpcomingSchedule = cleanCalendar3
       .filter((event) => event.rotatingDay)
       .map((event) => ({
-        date: event.date,
+        date: event.dateRange,
         start: event.start,
         rotatingDay: event.rotatingDay,
         subjects: KINDERGARTEN_SUBJECTS[event.rotatingDay] || []
@@ -165,13 +177,13 @@ export async function POST(req) {
 
 RULES:
 1. Answer the parent's question ONLY using the School Calendar Events, CLEAN SCHOOL DAY SCHEDULE, and Kindergarten Rotating Day Subjects provided to you. Never invent or assume school information.
-2. Use America/New_York as the local timezone. Correctly interpret relative dates such as today, tomorrow, Friday, this weekend, next week, and next month.
-3. When useful, include the actual date in your answer. For example: "Friday, September 25."
-4. If the provided information is insufficient to answer confidently, say exactly:
+2. Use America/New_York as the local timezone.
+3. For multi-day closures or breaks (e.g., Thanksgiving, Winter Break, Spring Break), check both the break events and any surrounding In-Service/No School days. If an event has a date range such as "Monday, November 23 through Friday, November 27", state all the weekdays included in that span.
+4. If school is closed for the entire week (Monday through Friday), clearly state that school is closed Monday through Friday and specify the dates.
+5. If the provided information is insufficient to answer confidently, say exactly:
 "I couldn't find that in the school information I have. Please check the latest official Moses Brown communication."
-5. Keep answers concise, friendly, and appropriate for a parent group.
-6. Protect privacy. Do not disclose information that appears specific to an individual student or family.
-7. Return ONLY the answer that should be sent to the parent. Do not include analysis, JSON, labels, or commentary.`;
+6. Keep answers concise, friendly, and appropriate for a parent group.
+7. Return ONLY the answer that should be sent to the parent.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
 ${question}
@@ -184,19 +196,17 @@ TOMORROW'S EASTERN DATE:
 ${tomorrowEastern.formatted}
 ISO DATE: ${tomorrowEastern.iso}
 
-CLEAN SCHOOL DAY SCHEDULE (ROTATING DAY 1-7 & KINDERGARTEN SUBJECTS):
+CLEAN SCHOOL DAY SCHEDULE:
 ${JSON.stringify(schoolDaySchedule, null, 2)}
 
 SCHOOL CALENDAR EVENTS:
 ${JSON.stringify(schoolEvents, null, 2)}
 
-Before answering, examine ALL of the information above.
-Return only the answer to send to the parent.`;
+Examine the events and date ranges carefully before answering. Return only the final text response.`;
 
     let generatedAnswer = null;
     let lastError = null;
 
-    // Active production models with automatic backoff retry
     const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
 
     for (const model of modelsToTry) {
@@ -214,8 +224,6 @@ Return only the answer to send to the parent.`;
         } catch (err) {
           lastError = err;
           const msg = err?.message || '';
-
-          // Wait on 503 high demand or 429 rate limit
           if (msg.includes('503') || msg.includes('429') || err?.status === 'UNAVAILABLE') {
             await new Promise((r) => setTimeout(r, attempt * 1200));
             continue;
