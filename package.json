@@ -8,11 +8,10 @@
     "start": "next start"
   },
   "dependencies": {
-    "@google/genai": "^0.1.1",
+    "@google/genai": "latest",
     "next": "14.2.15",
     "node-ical": "^0.18.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
-  },
-  "packageManager": "npm@10.8.2"
+  }
 }
