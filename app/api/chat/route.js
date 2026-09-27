@@ -58,7 +58,6 @@ const extractIsoDate = (dateVal) => {
     if (match) return `${match[1]}-${match[2]}-${match[3]}`;
   }
   const d = new Date(dateVal);
-  // For all-day events at midnight UTC, format using UTC so 2026-09-28 doesn't become 2026-09-27 in EDT
   if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
     return d.toISOString().slice(0, 10);
   }
@@ -82,7 +81,6 @@ const cleanCalendarEvents = (events) => {
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
       const startIso = extractIsoDate(event.start);
 
-      // Create noon anchor for displaying formatted date
       const [year, month, day] = startIso.split('-').map(Number);
       const displayDate = new Date(Date.UTC(year, month - 1, day, 16));
       let formattedDateRange = formatDateEastern(displayDate);
@@ -145,9 +143,30 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
-export async function POST(req) {
+async function logToGoogleSheet(question, answer, status = 'OK') {
+  const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
+  if (!webhookUrl) return;
+
   try {
-    const { question } = await req.json();
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: question || '',
+        answer: (answer || '').slice(0, 300),
+        status
+      })
+    });
+  } catch (err) {
+    console.error('Error logging to Google Sheet:', err);
+  }
+}
+
+export async function POST(req) {
+  let userQuestion = '';
+  try {
+    const body = await req.json();
+    userQuestion = body.question || '';
 
     if (!process.env.GEMINI_API_KEY) {
       return Response.json({
@@ -157,7 +176,7 @@ export async function POST(req) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Fetch and parse all 3 feeds
+    // Fetch and parse all 3 feeds concurrently
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -243,7 +262,7 @@ export async function POST(req) {
       kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
     };
 
-    const systemPrompt = `You are MB411, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
+    const systemPrompt = `You are Mo B Calendar Assistant, an unofficial parent-maintained information assistant for Moses Brown School. You are not affiliated with or endorsed by Moses Brown School.
 
 CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 
@@ -285,7 +304,7 @@ CRITICAL INSTRUCTIONS & STRICT PARENT ASSISTANT RULES:
 - Return ONLY the final message text to send directly to the parent. No meta-commentary, conversational filler, or internal reasoning.`;
 
     const userPrompt = `CURRENT PARENT QUESTION:
-${question}
+${userQuestion}
 
 TODAY GROUND TRUTH STATUS:
 ${JSON.stringify(todayStatusInfo, null, 2)}
@@ -342,9 +361,13 @@ Return only the final answer for the parent.`;
       throw lastError || new Error('No models succeeded.');
     }
 
+    // Log query and answer to Google Sheet
+    await logToGoogleSheet(userQuestion, generatedAnswer, 'SUCCESS');
+
     return Response.json({ answer: generatedAnswer });
   } catch (error) {
-    console.error('Error in MB411 Calendar Assistant:', error);
+    console.error('Error in Mo B Calendar Assistant:', error);
+    await logToGoogleSheet(userQuestion, error.message, 'ERROR');
     return Response.json({ answer: `Error: ${error.message || 'An unknown error occurred'}` });
   }
 }
