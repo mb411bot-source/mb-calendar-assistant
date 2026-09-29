@@ -152,6 +152,7 @@ async function logToGoogleSheet(question, answer, status = 'OK') {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        source: 'vercel', // Tells the script to append to the "vercel" tab
         question: question || '',
         answer: (answer || '').slice(0, 300),
         status
