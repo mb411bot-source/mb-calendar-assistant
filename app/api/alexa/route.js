@@ -124,24 +124,27 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
-// Formats a clean Alexa JSON response
 function formatAlexaSpeech(speechText, shouldEndSession = true) {
-  // Strip out markdown asterisks or special characters for cleaner TTS
-  const cleanSpeech = speechText.replace(/[*_#`]/g, '').trim();
+  const cleanSpeech = (speechText || '')
+    .replace(/[*_#`\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  return Response.json({
-    version: '1.0',
-    response: {
-      outputSpeech: {
-        type: 'PlainText',
-        text: cleanSpeech
-      },
-      shouldEndSession: shouldEndSession
-    }
-  });
+  return Response.json(
+    {
+      version: '1.0',
+      response: {
+        outputSpeech: {
+          type: 'PlainText',
+          text: cleanSpeech || "I didn't receive a response."
+        },
+        shouldEndSession: shouldEndSession
+      }
+    },
+    { status: 200 }
+  );
 }
 
-// Log directly to the Google Sheet
 async function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
   if (!webhookUrl) return;
@@ -151,7 +154,7 @@ async function logToGoogleSheet(question, answer, status = 'OK') {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        source: 'vercel', // Logs directly to your sheet
+        source: 'vercel',
         question: `[Alexa] ${question}`,
         answer: (answer || '').slice(0, 300),
         status
@@ -162,6 +165,10 @@ async function logToGoogleSheet(question, answer, status = 'OK') {
   }
 }
 
+export async function GET() {
+  return Response.json({ status: 'online', service: 'Mo B Alexa Endpoint' });
+}
+
 export async function POST(req) {
   let userQuestion = '';
 
@@ -169,38 +176,38 @@ export async function POST(req) {
     const body = await req.json();
     const reqType = body?.request?.type;
 
-    // 1. Handle LaunchRequest (when someone says "Alexa, open Mo B")
     if (reqType === 'LaunchRequest') {
       return formatAlexaSpeech(
         'Welcome to the Mo B Assistant. You can ask what rotating day it is, check school closures, or ask about upcoming events.',
-        false // Keep session open to listen for the user's question
-      );
-    }
-
-    // 2. Handle Stop/Cancel intents
-    const intentName = body?.request?.intent?.name;
-    if (intentName === 'AMAZON.StopIntent' || intentName === 'AMAZON.CancelIntent') {
-      return formatAlexaSpeech('Goodbye!');
-    }
-
-    // 3. Extract the question from the slot
-    if (reqType === 'IntentRequest') {
-      const slots = body?.request?.intent?.slots || {};
-      userQuestion = slots.query?.value || slots.Question?.value || slots.AskQuery?.value || '';
-    }
-
-    if (!userQuestion) {
-      return formatAlexaSpeech(
-        'I did not catch your question. You can ask what day it is tomorrow, or check upcoming events.',
         false
       );
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      return formatAlexaSpeech('The assistant is missing its API configuration.');
+    const intent = body?.request?.intent;
+    const intentName = intent?.name;
+
+    if (intentName === 'AMAZON.StopIntent' || intentName === 'AMAZON.CancelIntent') {
+      return formatAlexaSpeech('Goodbye!');
     }
 
-    // 4. Fetch the calendar feeds
+    // Extract query across any slot naming variations
+    const slots = intent?.slots || {};
+    for (const key of Object.keys(slots)) {
+      if (slots[key]?.value) {
+        userQuestion = slots[key].value;
+        break;
+      }
+    }
+
+    // Default question if FallbackIntent triggered without slot text
+    if (!userQuestion) {
+      userQuestion = 'What day is it for kindergarten tomorrow?';
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return formatAlexaSpeech('The assistant is missing its API key configuration.');
+    }
+
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -236,7 +243,6 @@ export async function POST(req) {
 
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
-    const next7Days = Array.from({ length: 7 }, (_, i) => getEasternDate(i));
 
     const isWeekendToday = todayEastern.weekday === 'Saturday' || todayEastern.weekday === 'Sunday';
     const closuresToday = schoolEvents.filter(
@@ -256,14 +262,12 @@ export async function POST(req) {
       kindergartenSubjects: rotatingScheduleToday?.kindergartenSubjects || []
     };
 
-    // Voice-tuned system instructions (no markdown, spoken naturally)
     const systemPrompt = `You are Mo B Voice Assistant for Moses Brown School.
-Your responses are read aloud by an Amazon Echo speaker:
-1. Keep responses under 2 or 3 short sentences.
-2. DO NOT use markdown, asterisks, bullet points, or special characters.
-3. Be conversational and clear for voice playback.
-4. Base all answers strictly on the provided calendar schedules.
-5. If the information is not in the calendar data, say: "I couldn't find that in the school schedule."`;
+Your answer will be read aloud by an Amazon Echo speaker:
+1. Answer in 1 or 2 concise, spoken sentences.
+2. DO NOT use markdown, asterisks, bullet points, or lists.
+3. Be direct and clear.
+4. Base your answer strictly on the provided school day schedule.`;
 
     const userPrompt = `PARENT QUESTION:
 ${userQuestion}
@@ -278,9 +282,7 @@ CLEAN SCHEDULE:
 ${JSON.stringify(schoolDaySchedule)}
 
 UPCOMING EVENTS:
-${JSON.stringify(schoolEvents)}
-
-Provide a concise spoken response for Alexa.`;
+${JSON.stringify(schoolEvents)}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const res = await ai.models.generateContent({
