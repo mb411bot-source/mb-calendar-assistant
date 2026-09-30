@@ -186,7 +186,7 @@ export async function POST(req) {
     // 3. Extract the question from the slot
     if (reqType === 'IntentRequest') {
       const slots = body?.request?.intent?.slots || {};
-      userQuestion = slots.query?.value || slots.question?.value || slots.AskQuery?.value || '';
+      userQuestion = slots.query?.value || slots.Question?.value || slots.AskQuery?.value || '';
     }
 
     if (!userQuestion) {
