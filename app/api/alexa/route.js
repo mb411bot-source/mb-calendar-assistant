@@ -199,7 +199,7 @@ export async function POST(req) {
       }
     }
 
-    // Default question if FallbackIntent triggered without slot text
+    // Default question fallback if triggered without explicit slot text
     if (!userQuestion) {
       userQuestion = 'What day is it for kindergarten tomorrow?';
     }
@@ -285,12 +285,35 @@ UPCOMING EVENTS:
 ${JSON.stringify(schoolEvents)}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const res = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: `${systemPrompt}\n\n${userPrompt}`
-    });
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+    let spokenAnswer = null;
 
-    const spokenAnswer = res?.text || "I'm sorry, I couldn't find an answer for that.";
+    for (const model of modelsToTry) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const res = await ai.models.generateContent({
+            model: model,
+            contents: `${systemPrompt}\n\n${userPrompt}`
+          });
+          if (res?.text) {
+            spokenAnswer = res.text;
+            break;
+          }
+        } catch (err) {
+          const msg = err?.message || '';
+          if (msg.includes('503') || msg.includes('429') || err?.status === 'UNAVAILABLE') {
+            await new Promise((r) => setTimeout(r, 400));
+            continue;
+          }
+          break;
+        }
+      }
+      if (spokenAnswer) break;
+    }
+
+    if (!spokenAnswer) {
+      spokenAnswer = "I'm sorry, the school schedule service is momentarily unavailable.";
+    }
 
     await logToGoogleSheet(userQuestion, spokenAnswer, 'SUCCESS');
 
