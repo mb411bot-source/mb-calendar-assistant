@@ -196,18 +196,19 @@ export async function POST(req) {
     const body = await req.json();
     const reqType = body?.request?.type;
 
+    // LaunchRequest ends session immediately after speaking so it behaves as a one-shot response
     if (reqType === 'LaunchRequest') {
-      return formatAlexaSpeech(
-        'Welcome to the Moses Brown Assistant. In the future, you must start your phrase with, "Ask Moses Brown", in order to trigger a question. What would you like to know?',
-        false
-      );
+      const welcomeText =
+        'Welcome to the Moses Brown Assistant. You can ask me what day is tomorrow, when is the next day off, or when is the flu clinic.';
+      await logToGoogleSheet('LaunchRequest', welcomeText, 'SUCCESS');
+      return formatAlexaSpeech(welcomeText, true);
     }
 
     const intent = body?.request?.intent;
     const intentName = intent?.name;
 
     if (intentName === 'AMAZON.StopIntent' || intentName === 'AMAZON.CancelIntent') {
-      return formatAlexaSpeech('Goodbye!');
+      return formatAlexaSpeech('Goodbye!', true);
     }
 
     const slots = intent?.slots || {};
@@ -218,24 +219,28 @@ export async function POST(req) {
       }
     }
 
+    // Auto-repair carrier clippings
     if (userQuestion.startsWith('it for ') || userQuestion.startsWith('it tomorrow')) {
       userQuestion = `What day is ${userQuestion}`;
     }
 
     if (!userQuestion) {
       if (intentName === 'AMAZON.FallbackIntent') {
-        return formatAlexaSpeech(
-          'I didn\'t catch that. Remember, you must start a phrase with, "Ask Moses Brown", in order to trigger a question. What would you like to check?',
-          false
-        );
+        const fallbackText =
+          'I did not catch that. Please ask your question starting with "Ask Moses Brown", followed by your question.';
+        await logToGoogleSheet('FallbackIntent (Empty)', fallbackText, 'FALLBACK');
+        return formatAlexaSpeech(fallbackText, true);
       }
       userQuestion = 'What is the schedule for tomorrow?';
     }
 
     if (!process.env.GEMINI_API_KEY) {
-      return formatAlexaSpeech('The assistant is missing its API configuration.');
+      const errText = 'The assistant is missing its API configuration.';
+      await logToGoogleSheet(userQuestion, errText, 'CONFIG_ERROR');
+      return formatAlexaSpeech(errText, true);
     }
 
+    // Fetch calendar feeds concurrently with timeout
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -258,10 +263,12 @@ export async function POST(req) {
     const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
     const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
 
+    // Filter events starting today forward and sort chronologically
     const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
       .filter((e) => e.date >= todayEastern.iso)
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // Filter rotating schedule starting today forward and sort chronologically
     const schoolDaySchedule = cleanCalendar3
       .filter((event) => event.rotatingDay && event.date >= todayEastern.iso)
       .map((event) => ({
@@ -320,6 +327,6 @@ ${JSON.stringify(schoolEvents.slice(0, 40))}`;
   } catch (error) {
     console.error('Alexa endpoint error:', error);
     await logToGoogleSheet(userQuestion, error.message, 'ERROR');
-    return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.');
+    return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.', true);
   }
 }
