@@ -19,6 +19,14 @@ const FEEDS = [
   }
 ];
 
+// In-memory cache holding parsed events across requests
+let calendarCache = {
+  timestamp: 0,
+  schoolEvents: [],
+  schoolDaySchedule: []
+};
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
 const kindergartenSubjects = {
   'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
   'Day 2': ['Math', 'Shop', 'social studies', 'fizz ed', 'Reading Groups', 'Science', 'Music'],
@@ -71,6 +79,7 @@ const cleanCalendarEvents = (events) => {
       const endDate = event.end ? new Date(event.end) : null;
       const isAllDay = !event.start.getHours && !event.start.getMinutes;
       const startIso = extractIsoDate(event.start);
+      const endIso = endDate ? extractIsoDate(endDate) : startIso;
 
       let timeString = 'All Day';
       if (!isAllDay && typeof event.start.getHours === 'function') {
@@ -88,6 +97,7 @@ const cleanCalendarEvents = (events) => {
         title,
         rotatingDay: rotatingDayMatch ? `Day ${rotatingDayMatch[1]}` : '',
         date: startIso,
+        endDate: endIso,
         time: timeString,
         location: (event.location || '').trim()
       };
@@ -127,7 +137,6 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Natural phonetic expansion
   cleanSpeech = cleanSpeech
     .replace(/\bELA\b/gi, 'English Language Arts')
     .replace(/\bPE\b/gi, 'fizz ed')
@@ -153,36 +162,32 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
 
 async function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.warn('GOOGLE_SHEET_WEBHOOK_URL is not defined in environment variables.');
-    return;
-  }
+  if (!webhookUrl) return;
 
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), 4000);
 
   try {
-    const res = await fetch(webhookUrl, {
+    await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source: 'vercel',
         question: `[Alexa] ${question}`,
         answer: (answer || '').slice(0, 300),
-        status
+        status: status || 'OK'
       }),
       redirect: 'follow',
       signal: controller.signal
     });
-    console.log('Sheet log response status:', res.status);
   } catch (err) {
-    console.error('Sheet logging error:', err?.name, err?.message);
+    console.error('Sheet logging error:', err?.message);
   } finally {
     clearTimeout(id);
   }
 }
 
-async function fetchWithTimeout(url, timeoutMs = 3000) {
+async function fetchWithTimeout(url, timeoutMs = 3500) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -193,6 +198,63 @@ async function fetchWithTimeout(url, timeoutMs = 3000) {
     clearTimeout(id);
     throw e;
   }
+}
+
+async function getCalendarData() {
+  const now = Date.now();
+  // Return cached data if still within TTL
+  if (calendarCache.timestamp && now - calendarCache.timestamp < CACHE_TTL_MS) {
+    return {
+      schoolEvents: calendarCache.schoolEvents,
+      schoolDaySchedule: calendarCache.schoolDaySchedule,
+      cached: true
+    };
+  }
+
+  const rawParsedFeeds = await Promise.all(
+    FEEDS.map(async (feed) => {
+      try {
+        const res = await fetchWithTimeout(feed.url, 3500);
+        if (!res.ok) return { name: feed.name, events: [] };
+        const rawIcs = await res.text();
+        const parsed = await ical.async.parseICS(rawIcs);
+        const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
+        return { name: feed.name, events };
+      } catch {
+        return { name: feed.name, events: [] };
+      }
+    })
+  );
+
+  const cleanCalendar1 = cleanCalendarEvents(rawParsedFeeds[0].events);
+  const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
+  const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
+
+  const schoolEvents = [...cleanCalendar1, ...cleanCalendar2].sort((a, b) => a.date.localeCompare(b.date));
+
+  const schoolDaySchedule = cleanCalendar3
+    .filter((event) => event.rotatingDay)
+    .map((event) => ({
+      date: event.date,
+      day: event.rotatingDay,
+      subjects: kindergartenSubjects[event.rotatingDay] || []
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // If feeds returned data, update the memory cache
+  if (schoolEvents.length > 0 || schoolDaySchedule.length > 0) {
+    calendarCache = {
+      timestamp: now,
+      schoolEvents,
+      schoolDaySchedule
+    };
+  }
+
+  return {
+    schoolEvents: calendarCache.schoolEvents,
+    schoolDaySchedule: calendarCache.schoolDaySchedule,
+    cached: false
+  };
 }
 
 export async function GET() {
@@ -228,7 +290,6 @@ export async function POST(req) {
       }
     }
 
-    // Auto-repair carrier clippings from Alexa
     if (
       userQuestion.startsWith('it for ') ||
       userQuestion.startsWith('it today') ||
@@ -243,8 +304,8 @@ export async function POST(req) {
     if (!userQuestion) {
       if (intentName === 'AMAZON.FallbackIntent') {
         const fallbackText =
-          'I did not catch that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
-        await logToGoogleSheet('FallbackIntent (Empty)', fallbackText, 'FALLBACK');
+          'I did not understand that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
+        await logToGoogleSheet('Fallback: Unrecognized Utterance', fallbackText, 'FALLBACK');
         return formatAlexaSpeech(fallbackText, true);
       }
       userQuestion = 'What day is it today in kindergarten?';
@@ -252,57 +313,32 @@ export async function POST(req) {
 
     if (!process.env.GEMINI_API_KEY) {
       const errText = 'The assistant is missing its API configuration.';
-      await logToGoogleSheet(userQuestion, errText, 'CONFIG_ERROR');
+      await logToGoogleSheet(userQuestion || 'Missing Config', errText, 'CONFIG_ERROR');
       return formatAlexaSpeech(errText, true);
     }
-
-    const rawParsedFeeds = await Promise.all(
-      FEEDS.map(async (feed) => {
-        try {
-          const res = await fetchWithTimeout(feed.url, 2800);
-          if (!res.ok) return { name: feed.name, events: [] };
-          const rawIcs = await res.text();
-          const parsed = await ical.async.parseICS(rawIcs);
-          const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
-          return { name: feed.name, events };
-        } catch {
-          return { name: feed.name, events: [] };
-        }
-      })
-    );
 
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
 
-    const cleanCalendar1 = cleanCalendarEvents(rawParsedFeeds[0].events);
-    const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
-    const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
+    const { schoolEvents: allEvents, schoolDaySchedule: allSchedules } = await getCalendarData();
 
-    // Filter events starting today forward and sort chronologically
-    const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
-      .filter((e) => e.date >= todayEastern.iso)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const upcomingEvents = allEvents.filter((e) => (e.endDate || e.date) >= todayEastern.iso);
+    const upcomingSchedule = allSchedules.filter((e) => e.date >= todayEastern.iso);
 
-    // Filter rotating schedule starting today forward and sort chronologically
-    const schoolDaySchedule = cleanCalendar3
-      .filter((event) => event.rotatingDay && event.date >= todayEastern.iso)
-      .map((event) => ({
-        date: event.date,
-        day: event.rotatingDay,
-        subjects: kindergartenSubjects[event.rotatingDay] || []
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    const systemPrompt = `You are the Moses Brown Voice Assistant.
-Your answer is spoken aloud by an Amazon Echo speaker:
+    const systemPrompt = `You are the Moses Brown School Voice Assistant.
+Your answer will be spoken aloud to parents by an Amazon Echo device:
 1. Answer concisely in 1 or 2 natural spoken sentences.
-2. DO NOT use markdown, asterisks, bullet points, or brackets.
+2. DO NOT use markdown, asterisks, bullet points, brackets, or code blocks.
 3. Be direct, clear, and friendly.
 4. When stating subjects, say "English Language Arts" instead of ELA, "social studies" instead of SS, and "fizz ed" instead of PE.
-5. When asked what day it is today or tomorrow (e.g. "what day is it today in kindergarten"), ALWAYS state the rotating day (e.g. Day 6) and kindergarten subjects first. DO NOT mention future events on later dates.
+5. When asked what day it is today or tomorrow (e.g. "what day is it today in kindergarten"), ALWAYS state the rotating day (e.g. Day 6) and kindergarten subjects first.
 6. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
-7. For day off, break, or holiday queries (e.g. "Spring Break", "Winter Break", "next day off"), search the upcoming school events for matches like "Break", "Spring Break", "No School", "Closed", "Holiday", "In-Service". State the dates clearly.
-8. State the date, time, and location when answering event queries like flu clinic, assemblies, or fairs.`;
+7. Handle school events with flexible keyword matching:
+   - "Expo", "Expo Weekend", "Homecoming", "Fall Expo": Match any event containing "Expo" or "Homecoming".
+   - "Spring Break": Match any multi-day break/closures in March or April.
+   - "Winter Break" / "Christmas Break": Match multi-day closures in late December / early January.
+   - "Next day off": Find the nearest upcoming date with "No School", "Closed", "Holiday", "Break", or "In-Service".
+8. When answering an event query, clearly state the date (e.g., "Friday, October 16th"), time if applicable, and title.`;
 
     const userPrompt = `PARENT QUESTION:
 ${userQuestion}
@@ -310,11 +346,11 @@ ${userQuestion}
 TODAY'S DATE: ${todayEastern.formatted} (${todayEastern.iso})
 TOMORROW'S DATE: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 
-UPCOMING ROTATING DAYS:
-${JSON.stringify(schoolDaySchedule.slice(0, 45))}
+UPCOMING ROTATING DAYS (NEXT 60 DAYS):
+${JSON.stringify(upcomingSchedule.slice(0, 60))}
 
-UPCOMING SCHOOL EVENTS & CLOSURES:
-${JSON.stringify(schoolEvents.slice(0, 100))}`;
+UPCOMING SCHOOL EVENTS & CLOSURES (NEXT 150 EVENTS):
+${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const modelsToTry = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
@@ -335,15 +371,17 @@ ${JSON.stringify(schoolEvents.slice(0, 100))}`;
       }
     }
 
+    let finalStatus = 'SUCCESS';
     if (!spokenAnswer) {
-      spokenAnswer = "I'm sorry, I couldn't retrieve the school calendar right now.";
+      finalStatus = 'AI_FAILURE';
+      spokenAnswer = "I'm sorry, I couldn't find that on the school calendar right now.";
     }
 
-    await logToGoogleSheet(userQuestion, spokenAnswer, 'SUCCESS');
+    await logToGoogleSheet(userQuestion, spokenAnswer, finalStatus);
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
-    await logToGoogleSheet(userQuestion, error.message, 'ERROR');
+    await logToGoogleSheet(userQuestion || 'Unhandled Exception', error.message, 'ERROR');
     return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.', true);
   }
 }
