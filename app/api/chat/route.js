@@ -251,13 +251,10 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
     }
 
     await logToGoogleSheet(userQuestion, reply, 'SUCCESS');
-    return Response.json({ reply, message: reply });
+    return Response.json({ reply, message: reply }, { status: 200 });
   } catch (error) {
     console.error('Chat endpoint error:', error);
     await logToGoogleSheet(userQuestion || 'Unhandled Chat Exception', error.message, 'ERROR');
     return Response.json({ error: 'Internal Server Error' }, { status: 500 });
   }
-}
-
-  return Response.json(responseBody, { status: 200 });
 }
