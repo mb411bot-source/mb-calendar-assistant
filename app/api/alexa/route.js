@@ -228,7 +228,7 @@ export async function POST(req) {
     const todayEastern = getEasternDate(0);
     const tomorrowEastern = getEasternDate(1);
 
-    const systemPrompt = `You are Mo B Voice Assistant for Moses Brown School.
+    const systemPrompt = `You are Moses Brown Voice Assistant for Moses Brown School.
 Your answer is spoken aloud by an Echo speaker:
 1. Answer in 1 or 2 concise, spoken sentences.
 2. DO NOT use markdown, asterisks, or lists.
