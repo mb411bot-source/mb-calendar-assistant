@@ -4,6 +4,8 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
+const VOICE_NAME = 'Brian'; // Change to Matthew, Joanna, Kendra, Salli, etc.
+
 const FEEDS = [
   {
     name: 'Feed 1 (School Events)',
@@ -122,16 +124,20 @@ const getEasternDate = (daysFromToday = 0) => {
 function formatAlexaSpeech(speechText, shouldEndSession = true) {
   const cleanSpeech = (speechText || '')
     .replace(/[*_#`\n]/g, ' ')
+    .replace(/&/g, 'and')
+    .replace(/[<>'"]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  const ssml = `<speak><voice name="${VOICE_NAME}">${cleanSpeech || "I didn't receive a response."}</voice></speak>`;
 
   return Response.json(
     {
       version: '1.0',
       response: {
         outputSpeech: {
-          type: 'PlainText',
-          text: cleanSpeech || "I didn't receive a response."
+          type: 'SSML',
+          ssml: ssml
         },
         shouldEndSession: shouldEndSession
       }
@@ -182,7 +188,7 @@ export async function POST(req) {
 
     if (reqType === 'LaunchRequest') {
       return formatAlexaSpeech(
-        'Welcome to Moses Brown Assistant. You can ask what rotating day it is, check school closures, or ask about upcoming events.',
+        'Welcome to the Moses Brown Assistant. In the future, you must start your phrase with, "Ask Moses Brown", in order to trigger a question. What would you like to know?',
         false
       );
     }
@@ -202,7 +208,6 @@ export async function POST(req) {
       }
     }
 
-    // Auto-repair carrier clippings
     if (userQuestion.startsWith('it for ') || userQuestion.startsWith('it tomorrow')) {
       userQuestion = `What day is ${userQuestion}`;
     }
@@ -210,7 +215,7 @@ export async function POST(req) {
     if (!userQuestion) {
       if (intentName === 'AMAZON.FallbackIntent') {
         return formatAlexaSpeech(
-          "I didn't quite catch that. You can ask what day is tomorrow, when is the next day off, or ask about events like flu clinic.",
+          'I didn\'t catch that. Remember, you must start a phrase with, "Ask Moses Brown", in order to trigger a question. What would you like to check?',
           false
         );
       }
@@ -221,7 +226,6 @@ export async function POST(req) {
       return formatAlexaSpeech('The assistant is missing its API configuration.');
     }
 
-    // Fetch calendar feeds concurrently with timeout
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -244,12 +248,10 @@ export async function POST(req) {
     const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
     const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
 
-    // Filter events starting today forward and sort chronologically
     const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
       .filter((e) => e.date >= todayEastern.iso)
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    // Filter rotating schedule starting today forward and sort chronologically
     const schoolDaySchedule = cleanCalendar3
       .filter((event) => event.rotatingDay && event.date >= todayEastern.iso)
       .map((event) => ({
@@ -265,7 +267,7 @@ Your answer is spoken aloud by an Amazon Echo speaker:
 2. DO NOT use markdown, asterisks, bullet points, or brackets.
 3. Be direct, clear, and friendly.
 4. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
-5. For day off queries, check the upcoming events for closures ("No School", "Closed", "Holiday", "Break", "In-Service").
+5. For day off queries, check upcoming events for closures ("No School", "Closed", "Holiday", "Break", "In-Service").
 6. State the date, time, and location when answering event queries like flu clinic, assemblies, or fairs.`;
 
     const userPrompt = `PARENT QUESTION:
