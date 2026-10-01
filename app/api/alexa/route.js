@@ -161,11 +161,11 @@ export async function POST(req) {
 
     if (reqType === 'LaunchRequest') {
       return formatAlexaSpeech(
-        'Welcome to Mo B Assistant. You can ask what rotating day it is, check school closures, or ask about sharing day.',
+        'Welcome to the Moses Brown Assistant. You can ask what rotating day it is, check school closures, or ask about sharing day.',
         false
       );
     }
-
+    
     const intent = body?.request?.intent;
     const intentName = intent?.name;
 
