@@ -146,20 +146,30 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
   );
 }
 
-function logToGoogleSheetAsync(question, answer, status = 'OK') {
+async function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
   if (!webhookUrl) return;
 
-  fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      source: 'vercel',
-      question: `[Alexa] ${question}`,
-      answer: (answer || '').slice(0, 300),
-      status
-    })
-  }).catch((err) => console.error('Background log error:', err));
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 1500);
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'vercel',
+        question: `[Alexa] ${question}`,
+        answer: (answer || '').slice(0, 300),
+        status
+      }),
+      signal: controller.signal
+    });
+  } catch (err) {
+    console.error('Sheet logging timed out or failed:', err?.message);
+  } finally {
+    clearTimeout(id);
+  }
 }
 
 async function fetchWithTimeout(url, timeoutMs = 3000) {
@@ -305,11 +315,11 @@ ${JSON.stringify(schoolEvents.slice(0, 40))}`;
       spokenAnswer = "I'm sorry, I couldn't retrieve the school calendar right now.";
     }
 
-    logToGoogleSheetAsync(userQuestion, spokenAnswer, 'SUCCESS');
+    await logToGoogleSheet(userQuestion, spokenAnswer, 'SUCCESS');
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
-    logToGoogleSheetAsync(userQuestion, error.message, 'ERROR');
+    await logToGoogleSheet(userQuestion, error.message, 'ERROR');
     return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.');
   }
 }
