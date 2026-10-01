@@ -36,15 +36,6 @@ const kindergartenSubjects = {
   'Day 7': ['Math', 'Meeting for Business', 'fizz ed', 'Library', 'social studies', 'English Language Arts', 'Spanish']
 };
 
-const formatDateEastern = (d) =>
-  new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
-  }).format(d);
-
 const formatTimeEastern = (d) =>
   new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
