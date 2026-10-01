@@ -4,8 +4,6 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
-const VOICE_NAME = 'Brian'; // Options: Matthew, Joanna, Kendra, Salli, Brian, etc.
-
 const FEEDS = [
   {
     name: 'Feed 1 (School Events)',
@@ -129,14 +127,15 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Replace abbreviations with their full spoken phonetic equivalents
+  // Keep phonetic expansion so pronunciation remains natural
   cleanSpeech = cleanSpeech
     .replace(/\bELA\b/gi, 'English Language Arts')
     .replace(/\bPE\b/gi, 'fizz ed')
     .replace(/\bSS\b/gi, 'social studies')
     .replace(/\bPhysical Education\b/gi, 'fizz ed');
 
-  const ssml = `<speak><voice name="${VOICE_NAME}">${cleanSpeech || "I didn't receive a response."}</voice></speak>`;
+  // No <voice> tag: inherits the Echo device's default user-configured voice
+  const ssml = `<speak>${cleanSpeech || "I didn't receive a response."}</speak>`;
 
   return Response.json(
     {
