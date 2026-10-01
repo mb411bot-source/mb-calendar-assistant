@@ -127,14 +127,13 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Keep phonetic expansion so pronunciation remains natural
+  // Spoken expansions
   cleanSpeech = cleanSpeech
     .replace(/\bELA\b/gi, 'English Language Arts')
     .replace(/\bPE\b/gi, 'fizz ed')
     .replace(/\bSS\b/gi, 'social studies')
     .replace(/\bPhysical Education\b/gi, 'fizz ed');
 
-  // No <voice> tag: inherits the Echo device's default user-configured voice
   const ssml = `<speak>${cleanSpeech || "I didn't receive a response."}</speak>`;
 
   return Response.json(
@@ -154,25 +153,30 @@ function formatAlexaSpeech(speechText, shouldEndSession = true) {
 
 async function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
-  if (!webhookUrl) return;
+  if (!webhookUrl) {
+    console.warn('GOOGLE_SHEET_WEBHOOK_URL is not set.');
+    return;
+  }
 
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), 1500);
+  const id = setTimeout(() => controller.abort(), 4000);
 
   try {
-    await fetch(webhookUrl, {
+    const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source: 'vercel',
         question: `[Alexa] ${question}`,
         answer: (answer || '').slice(0, 300),
-        status
+        status: status || 'OK'
       }),
+      redirect: 'follow',
       signal: controller.signal
     });
+    console.log('Sheet log result:', res.status, 'status:', status);
   } catch (err) {
-    console.error('Sheet logging timed out or failed:', err?.message);
+    console.error('Sheet logging error:', err?.name, err?.message);
   } finally {
     clearTimeout(id);
   }
@@ -236,11 +240,12 @@ export async function POST(req) {
       userQuestion = `What day ${userQuestion.replace(/^day /, '')}`;
     }
 
+    // Capture unrecognized or empty speech
     if (!userQuestion) {
       if (intentName === 'AMAZON.FallbackIntent') {
         const fallbackText =
-          'I did not catch that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
-        await logToGoogleSheet('FallbackIntent (Empty)', fallbackText, 'FALLBACK');
+          'I did not understand that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
+        await logToGoogleSheet('Fallback: Unrecognized Utterance', fallbackText, 'FALLBACK');
         return formatAlexaSpeech(fallbackText, true);
       }
       userQuestion = 'What day is it today in kindergarten?';
@@ -248,20 +253,25 @@ export async function POST(req) {
 
     if (!process.env.GEMINI_API_KEY) {
       const errText = 'The assistant is missing its API configuration.';
-      await logToGoogleSheet(userQuestion, errText, 'CONFIG_ERROR');
+      await logToGoogleSheet(userQuestion || 'Missing Config', errText, 'CONFIG_ERROR');
       return formatAlexaSpeech(errText, true);
     }
 
+    let feedErrors = [];
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
           const res = await fetchWithTimeout(feed.url, 2800);
-          if (!res.ok) return { name: feed.name, events: [] };
+          if (!res.ok) {
+            feedErrors.push(`${feed.name} HTTP ${res.status}`);
+            return { name: feed.name, events: [] };
+          }
           const rawIcs = await res.text();
           const parsed = await ical.async.parseICS(rawIcs);
           const events = Object.values(parsed).filter((item) => item.type === 'VEVENT');
           return { name: feed.name, events };
-        } catch {
+        } catch (err) {
+          feedErrors.push(`${feed.name} Error: ${err.message}`);
           return { name: feed.name, events: [] };
         }
       })
@@ -295,7 +305,7 @@ Your answer is spoken aloud by an Amazon Echo speaker:
 4. When stating subjects, say "English Language Arts" instead of ELA, "social studies" instead of SS, and "fizz ed" instead of PE.
 5. When asked what day it is today or tomorrow (e.g. "what day is it today in kindergarten"), ALWAYS state the rotating day (e.g. Day 6) and kindergarten subjects first. DO NOT mention future events on later dates.
 6. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
-7. For day off queries, check upcoming events for closures ("No School", "Closed", "Holiday", "Break", "In-Service").
+7. For day off, break, or holiday queries (e.g. "Spring Break", "Winter Break", "next day off"), search the upcoming school events for matches like "Break", "Spring Break", "No School", "Closed", "Holiday", "In-Service". State the dates clearly.
 8. State the date, time, and location when answering event queries like flu clinic, assemblies, or fairs.`;
 
     const userPrompt = `PARENT QUESTION:
@@ -305,14 +315,15 @@ TODAY'S DATE: ${todayEastern.formatted} (${todayEastern.iso})
 TOMORROW'S DATE: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 
 UPCOMING ROTATING DAYS:
-${JSON.stringify(schoolDaySchedule.slice(0, 30))}
+${JSON.stringify(schoolDaySchedule.slice(0, 45))}
 
 UPCOMING SCHOOL EVENTS & CLOSURES:
-${JSON.stringify(schoolEvents.slice(0, 40))}`;
+${JSON.stringify(schoolEvents.slice(0, 100))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const modelsToTry = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
     let spokenAnswer = null;
+    let geminiErrors = [];
 
     for (const model of modelsToTry) {
       try {
@@ -325,19 +336,31 @@ ${JSON.stringify(schoolEvents.slice(0, 40))}`;
           break;
         }
       } catch (err) {
+        geminiErrors.push(`${model}: ${err?.message}`);
         console.warn(`Model ${model} failed:`, err?.message);
       }
     }
 
+    // Determine final status
+    let finalStatus = 'SUCCESS';
     if (!spokenAnswer) {
+      finalStatus = 'AI_FAILURE';
       spokenAnswer = "I'm sorry, I couldn't retrieve the school calendar right now.";
+    } else if (feedErrors.length > 0) {
+      finalStatus = 'DEGRADED_FEEDS';
     }
 
-    await logToGoogleSheet(userQuestion, spokenAnswer, 'SUCCESS');
+    // Log with the actual outcome status
+    await logToGoogleSheet(
+      userQuestion,
+      spokenAnswer + (geminiErrors.length > 0 ? ` [Warnings: ${geminiErrors.join(', ')}]` : ''),
+      finalStatus
+    );
+
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
-    await logToGoogleSheet(userQuestion, error.message, 'ERROR');
+    await logToGoogleSheet(userQuestion || 'Unhandled Exception', error.message, 'ERROR');
     return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.', true);
   }
 }
