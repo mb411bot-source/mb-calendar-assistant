@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
 
-const VOICE_NAME = 'Brian'; // Change to Matthew, Joanna, Kendra, Salli, etc.
+const VOICE_NAME = 'Brian'; // Options: Matthew, Joanna, Kendra, Salli, Brian, etc.
 
 const FEEDS = [
   {
@@ -22,13 +22,13 @@ const FEEDS = [
 ];
 
 const kindergartenSubjects = {
-  'Day 1': ['Art', 'ELA', 'Math', 'Library', 'PE'],
-  'Day 2': ['Math', 'Shop', 'SS', 'PE', 'Reading Groups', 'Science', 'Music'],
-  'Day 3': ['Math', 'SS', 'Community Time', 'PE', 'Art', 'ELA'],
-  'Day 4': ['ELA', 'Tech', 'Science', 'SS', 'Music', 'Math', 'Meeting for Sharing'],
-  'Day 5': ['ELA', 'Art', 'Math', 'SS', 'Library', 'Spanish'],
-  'Day 6': ['Tech', 'Math', 'Reading Groups', 'PE', 'SS', 'Music', 'Art', 'ELA'],
-  'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'SS', 'ELA', 'Spanish']
+  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
+  'Day 2': ['Math', 'Shop', 'social studies', 'fizz ed', 'Reading Groups', 'Science', 'Music'],
+  'Day 3': ['Math', 'social studies', 'Community Time', 'fizz ed', 'Art', 'English Language Arts'],
+  'Day 4': ['English Language Arts', 'Tech', 'Science', 'social studies', 'Music', 'Math', 'Meeting for Sharing'],
+  'Day 5': ['English Language Arts', 'Art', 'Math', 'social studies', 'Library', 'Spanish'],
+  'Day 6': ['Tech', 'Math', 'Reading Groups', 'fizz ed', 'social studies', 'Music', 'Art', 'English Language Arts'],
+  'Day 7': ['Math', 'Meeting for Business', 'fizz ed', 'Library', 'social studies', 'English Language Arts', 'Spanish']
 };
 
 const formatDateEastern = (d) =>
@@ -122,12 +122,19 @@ const getEasternDate = (daysFromToday = 0) => {
 };
 
 function formatAlexaSpeech(speechText, shouldEndSession = true) {
-  const cleanSpeech = (speechText || '')
+  let cleanSpeech = (speechText || '')
     .replace(/[*_#`\n]/g, ' ')
     .replace(/&/g, 'and')
     .replace(/[<>'"]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Replace abbreviations with their full spoken phonetic equivalents
+  cleanSpeech = cleanSpeech
+    .replace(/\bELA\b/gi, 'English Language Arts')
+    .replace(/\bPE\b/gi, 'fizz ed')
+    .replace(/\bSS\b/gi, 'social studies')
+    .replace(/\bPhysical Education\b/gi, 'fizz ed');
 
   const ssml = `<speak><voice name="${VOICE_NAME}">${cleanSpeech || "I didn't receive a response."}</voice></speak>`;
 
@@ -196,10 +203,9 @@ export async function POST(req) {
     const body = await req.json();
     const reqType = body?.request?.type;
 
-    // LaunchRequest ends session immediately after speaking so it behaves as a one-shot response
     if (reqType === 'LaunchRequest') {
       const welcomeText =
-        'Welcome to the Moses Brown Assistant. You can ask me what day is tomorrow, when is the next day off, or when is the flu clinic.';
+        'Welcome to the Moses Brown Assistant. You can ask what day is today, what day is tomorrow, or when is the next day off.';
       await logToGoogleSheet('LaunchRequest', welcomeText, 'SUCCESS');
       return formatAlexaSpeech(welcomeText, true);
     }
@@ -214,24 +220,31 @@ export async function POST(req) {
     const slots = intent?.slots || {};
     for (const key of Object.keys(slots)) {
       if (slots[key]?.value) {
-        userQuestion = slots[key].value;
+        userQuestion = slots[key].value.trim();
         break;
       }
     }
 
-    // Auto-repair carrier clippings
-    if (userQuestion.startsWith('it for ') || userQuestion.startsWith('it tomorrow')) {
-      userQuestion = `What day is ${userQuestion}`;
+    // Auto-repair carrier clippings from Alexa
+    if (
+      userQuestion.startsWith('it for ') ||
+      userQuestion.startsWith('it today') ||
+      userQuestion.startsWith('it tomorrow') ||
+      userQuestion.startsWith('is it today') ||
+      userQuestion.startsWith('is it tomorrow') ||
+      userQuestion.startsWith('day is it')
+    ) {
+      userQuestion = `What day ${userQuestion.replace(/^day /, '')}`;
     }
 
     if (!userQuestion) {
       if (intentName === 'AMAZON.FallbackIntent') {
         const fallbackText =
-          'I did not catch that. Please ask your question starting with "Ask Moses Brown", followed by your question.';
+          'I did not catch that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
         await logToGoogleSheet('FallbackIntent (Empty)', fallbackText, 'FALLBACK');
         return formatAlexaSpeech(fallbackText, true);
       }
-      userQuestion = 'What is the schedule for tomorrow?';
+      userQuestion = 'What day is it today in kindergarten?';
     }
 
     if (!process.env.GEMINI_API_KEY) {
@@ -240,7 +253,6 @@ export async function POST(req) {
       return formatAlexaSpeech(errText, true);
     }
 
-    // Fetch calendar feeds concurrently with timeout
     const rawParsedFeeds = await Promise.all(
       FEEDS.map(async (feed) => {
         try {
@@ -263,12 +275,10 @@ export async function POST(req) {
     const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
     const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
 
-    // Filter events starting today forward and sort chronologically
     const schoolEvents = [...cleanCalendar1, ...cleanCalendar2]
       .filter((e) => e.date >= todayEastern.iso)
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    // Filter rotating schedule starting today forward and sort chronologically
     const schoolDaySchedule = cleanCalendar3
       .filter((event) => event.rotatingDay && event.date >= todayEastern.iso)
       .map((event) => ({
@@ -283,9 +293,11 @@ Your answer is spoken aloud by an Amazon Echo speaker:
 1. Answer concisely in 1 or 2 natural spoken sentences.
 2. DO NOT use markdown, asterisks, bullet points, or brackets.
 3. Be direct, clear, and friendly.
-4. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
-5. For day off queries, check upcoming events for closures ("No School", "Closed", "Holiday", "Break", "In-Service").
-6. State the date, time, and location when answering event queries like flu clinic, assemblies, or fairs.`;
+4. When stating subjects, say "English Language Arts" instead of ELA, "social studies" instead of SS, and "fizz ed" instead of PE.
+5. When asked what day it is today or tomorrow (e.g. "what day is it today in kindergarten"), ALWAYS state the rotating day (e.g. Day 6) and kindergarten subjects first. DO NOT mention future events on later dates.
+6. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
+7. For day off queries, check upcoming events for closures ("No School", "Closed", "Holiday", "Break", "In-Service").
+8. State the date, time, and location when answering event queries like flu clinic, assemblies, or fairs.`;
 
     const userPrompt = `PARENT QUESTION:
 ${userQuestion}
@@ -293,7 +305,7 @@ ${userQuestion}
 TODAY'S DATE: ${todayEastern.formatted} (${todayEastern.iso})
 TOMORROW'S DATE: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 
-UPCOMING ROTATING DAYS (NEXT 30 DAYS):
+UPCOMING ROTATING DAYS:
 ${JSON.stringify(schoolDaySchedule.slice(0, 30))}
 
 UPCOMING SCHOOL EVENTS & CLOSURES:
