@@ -190,15 +190,15 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    userQuestion = (body?.message || body?.question || '').trim();
+    userQuestion = (body?.message || body?.question || body?.prompt || body?.text || '').trim();
 
     if (!userQuestion) {
-      return Response.json({ reply: 'Please enter a question.' }, { status: 400 });
+      return Response.json({ reply: 'Please enter a question.', message: 'Please enter a question.' }, { status: 400 });
     }
 
     if (!process.env.GEMINI_API_KEY) {
       await logToGoogleSheet(userQuestion, 'Missing GEMINI_API_KEY', 'CONFIG_ERROR');
-      return Response.json({ reply: 'Assistant configuration missing.' }, { status: 500 });
+      return Response.json({ reply: 'Assistant configuration missing.', message: 'Assistant configuration missing.' }, { status: 500 });
     }
 
     const todayEastern = getEasternDate(0);
@@ -251,7 +251,17 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
     }
 
     await logToGoogleSheet(userQuestion, reply, 'SUCCESS');
-    return Response.json({ reply, message: reply }, { status: 200 });
+
+    // Return all standard response fields so the frontend template picks it up
+    return Response.json({
+      response: reply,
+      reply: reply,
+      answer: reply,
+      text: reply,
+      message: reply,
+      content: reply,
+      output: reply
+    }, { status: 200 });
   } catch (error) {
     console.error('Chat endpoint error:', error);
     await logToGoogleSheet(userQuestion || 'Unhandled Chat Exception', error.message, 'ERROR');
