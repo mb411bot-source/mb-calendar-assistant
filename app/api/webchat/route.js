@@ -187,12 +187,20 @@ export async function POST(req) {
     userQuestion = (body?.question || body?.message || body?.prompt || body?.text || '').trim();
 
     if (!userQuestion) {
-      return Response.json({ answer: 'Please enter a question.' }, { status: 400 });
+      return Response.json({
+        answer: 'Please enter a question.',
+        reply: 'Please enter a question.',
+        message: 'Please enter a question.'
+      }, { status: 400 });
     }
 
     if (!process.env.GEMINI_API_KEY) {
       logToGoogleSheet(userQuestion, 'Missing GEMINI_API_KEY', 'CONFIG_ERROR');
-      return Response.json({ answer: 'Assistant configuration missing.' }, { status: 500 });
+      return Response.json({
+        answer: 'Assistant configuration missing.',
+        reply: 'Assistant configuration missing.',
+        message: 'Assistant configuration missing.'
+      }, { status: 500 });
     }
 
     const todayEastern = getEasternDate(0);
@@ -204,9 +212,9 @@ export async function POST(req) {
 
     const systemPrompt = `You are the helpful assistant for Moses Brown School.
 1. Answer clearly, accurately, and concisely.
-2. For rotating day queries (today/tomorrow), state the day (Day 1 - Day 7) and kindergarten subjects first.
-3. For breaks/holidays (Winter Break, Spring Break, next day off), state the exact dates and class resumption dates.
-4. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
+2. For rotating day queries (today/tomorrow), state the day number (Day 1 - Day 7) and kindergarten subjects first.
+3. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4). Check the upcoming rotating days for the next Day 4 date.
+4. For breaks/holidays (Winter Break, Spring Break, next day off), state the exact dates and class resumption dates.
 5. For events like Expo Weekend or Homecoming, list dates, times, and locations clearly.`;
 
     const userPrompt = `PARENT QUESTION:
@@ -222,17 +230,17 @@ UPCOMING SCHOOL EVENTS & CLOSURES:
 ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
     let reply = null;
 
     for (const model of modelsToTry) {
       try {
-        const res = await ai.models.generateContent({
+        const response = await ai.models.generateContent({
           model: model,
           contents: `${systemPrompt}\n\n${userPrompt}`
         });
-        if (res?.text) {
-          reply = res.text;
+        if (response?.text) {
+          reply = response.text;
           break;
         }
       } catch (err) {
@@ -241,7 +249,7 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
     }
 
     if (!reply) {
-      reply = "I'm sorry, I couldn't find that information on the calendar.";
+      reply = "I'm sorry, I couldn't locate that on the school calendar right now. Please try again in a moment.";
     }
 
     logToGoogleSheet(userQuestion, reply, 'SUCCESS');
@@ -256,6 +264,10 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
   } catch (error) {
     console.error('Chat endpoint error:', error);
     logToGoogleSheet(userQuestion || 'Unhandled Chat Exception', error.message, 'ERROR');
-    return Response.json({ answer: 'Sorry, I encountered an issue retrieving the calendar.' }, { status: 500 });
+    return Response.json({
+      answer: 'Sorry, I encountered an issue retrieving the calendar.',
+      reply: 'Sorry, I encountered an issue retrieving the calendar.',
+      error: error.message
+    }, { status: 500 });
   }
 }
