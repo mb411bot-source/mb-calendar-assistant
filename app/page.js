@@ -26,8 +26,7 @@ export default function Home() {
     setMessages((prev) => [...prev, { sender: 'user', text: userText }]);
     setLoading(true);
 
-    try {
-      const res = await fetch('/api/chat', {
+    const res = await fetch('/api/webchat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
