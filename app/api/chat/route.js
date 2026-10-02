@@ -65,8 +65,12 @@ const cleanCalendarEvents = (events) => {
 
       let timeString = 'All Day';
       if (!isAllDay && typeof event.start.getHours === 'function') {
-        const timeOptions = { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true };
-        timeString = new Intl.DateTimeFormat('en-US', timeOptions).format(startDate);
+        timeString = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/New_York',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }).format(startDate);
       }
 
       const title = (event.summary || '').trim();
@@ -107,7 +111,6 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
-// Fire and forget logging so it never blocks the browser response
 function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
   if (!webhookUrl) return;
@@ -184,20 +187,12 @@ export async function POST(req) {
     userQuestion = (body?.question || body?.message || body?.prompt || body?.text || '').trim();
 
     if (!userQuestion) {
-      return Response.json({
-        answer: 'Please enter a question.',
-        reply: 'Please enter a question.',
-        message: 'Please enter a question.'
-      }, { status: 400 });
+      return Response.json({ answer: 'Please enter a question.' }, { status: 400 });
     }
 
     if (!process.env.GEMINI_API_KEY) {
       logToGoogleSheet(userQuestion, 'Missing GEMINI_API_KEY', 'CONFIG_ERROR');
-      return Response.json({
-        answer: 'Assistant configuration missing.',
-        reply: 'Assistant configuration missing.',
-        message: 'Assistant configuration missing.'
-      }, { status: 500 });
+      return Response.json({ answer: 'Assistant configuration missing.' }, { status: 500 });
     }
 
     const todayEastern = getEasternDate(0);
@@ -249,23 +244,18 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
       reply = "I'm sorry, I couldn't find that information on the calendar.";
     }
 
-    // Log without blocking the response
     logToGoogleSheet(userQuestion, reply, 'SUCCESS');
 
-    // Return all standard keys so page.js always finds the text
     return Response.json({
       answer: reply,
       reply: reply,
       message: reply,
-      response: reply,
-      text: reply
+      text: reply,
+      response: reply
     }, { status: 200 });
   } catch (error) {
     console.error('Chat endpoint error:', error);
     logToGoogleSheet(userQuestion || 'Unhandled Chat Exception', error.message, 'ERROR');
-    return Response.json({
-      error: 'Internal Server Error',
-      answer: 'Sorry, I encountered an issue retrieving the calendar.'
-    }, { status: 500 });
+    return Response.json({ answer: 'Sorry, I encountered an issue retrieving the calendar.' }, { status: 500 });
   }
 }
