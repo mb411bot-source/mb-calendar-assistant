@@ -230,7 +230,13 @@ UPCOMING SCHOOL EVENTS & CLOSURES:
 ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+    
+    // Active models
+    const modelsToTry = [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite'
+    ];
     let reply = null;
     let errorsCaptured = [];
 
@@ -247,7 +253,7 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
           break;
         }
       } catch (err) {
-        console.error(`Model ${model} call failed:`, err?.message || err);
+        console.warn(`Model ${model} failed:`, err?.message);
         errorsCaptured.push(`${model}: ${err?.message || 'failed'}`);
       }
     }
