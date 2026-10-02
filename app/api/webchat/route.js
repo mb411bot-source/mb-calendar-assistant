@@ -232,6 +232,7 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
     let reply = null;
+    let errorsCaptured = [];
 
     for (const model of modelsToTry) {
       try {
@@ -239,20 +240,30 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
           model: model,
           contents: `${systemPrompt}\n\n${userPrompt}`
         });
-        if (response?.text) {
-          reply = response.text;
+
+        const textOutput = response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textOutput && textOutput.trim().length > 0) {
+          reply = textOutput.trim();
           break;
         }
       } catch (err) {
-        console.warn(`Model ${model} failed:`, err?.message);
+        console.error(`Model ${model} call failed:`, err?.message || err);
+        errorsCaptured.push(`${model}: ${err?.message || 'failed'}`);
       }
     }
 
     if (!reply) {
-      reply = "I'm sorry, I couldn't locate that on the school calendar right now. Please try again in a moment.";
+      const todayScheduleMatch = upcomingSchedule.find((s) => s.date === todayEastern.iso);
+      if (todayScheduleMatch && /today|what day/i.test(userQuestion)) {
+        const subjects = todayScheduleMatch.subjects.join(', ');
+        reply = `Today is ${todayScheduleMatch.day} in kindergarten. The subjects for today are ${subjects}.`;
+      } else {
+        reply = "I'm sorry, I couldn't locate that on the school calendar right now. Please try again in a moment.";
+      }
+      logToGoogleSheet(userQuestion, reply, `FALLBACK (${errorsCaptured.join('; ')})`);
+    } else {
+      logToGoogleSheet(userQuestion, reply, 'SUCCESS');
     }
-
-    logToGoogleSheet(userQuestion, reply, 'SUCCESS');
 
     return Response.json({
       answer: reply,
