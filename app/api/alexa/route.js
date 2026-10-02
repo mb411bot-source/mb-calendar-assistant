@@ -185,7 +185,7 @@ async function logToGoogleSheet(question, answer, status = 'OK') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source: 'vercel',
-        question: `[Alexa] ${question}`,
+        question: question,
         answer: (answer || '').slice(0, 300),
         status: status || 'OK'
       }),
@@ -286,6 +286,64 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
+
+    // SHIELD: Check if the request came from the Web UI instead of Alexa
+    const isWebRequest = Boolean((body?.question || body?.message || body?.prompt || body?.text) && !body?.request);
+
+    if (isWebRequest) {
+      userQuestion = (body?.question || body?.message || body?.prompt || body?.text || '').trim();
+
+      const todayEastern = getEasternDate(0);
+      const tomorrowEastern = getEasternDate(1);
+      const { schoolEvents: allEvents, schoolDaySchedule: allSchedules } = await getCalendarData();
+
+      const upcomingEvents = allEvents.filter((e) => (e.endDate || e.date) >= todayEastern.iso);
+      const upcomingSchedule = allSchedules.filter((e) => e.date >= todayEastern.iso);
+
+      const systemPrompt = `You are the helpful assistant for Moses Brown School. Answer clearly and concisely.`;
+      const userPrompt = `PARENT QUESTION:
+${userQuestion}
+
+TODAY: ${todayEastern.formatted} (${todayEastern.iso})
+TOMORROW: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
+
+ROTATING DAYS:
+${JSON.stringify(upcomingSchedule.slice(0, 60))}
+
+SCHOOL EVENTS:
+${JSON.stringify(upcomingEvents.slice(0, 150))}`;
+
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      let reply = "I couldn't find that on the calendar.";
+      const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+
+      for (const model of modelsToTry) {
+        try {
+          const res = await ai.models.generateContent({
+            model: model,
+            contents: `${systemPrompt}\n\n${userPrompt}`
+          });
+          if (res?.text) {
+            reply = res.text;
+            break;
+          }
+        } catch (err) {
+          console.warn(`Model ${model} failed:`, err?.message);
+        }
+      }
+
+      await logToGoogleSheet(`[Web] ${userQuestion}`, reply, 'SUCCESS');
+
+      return Response.json({
+        answer: reply,
+        reply: reply,
+        message: reply,
+        text: reply,
+        response: reply
+      }, { status: 200 });
+    }
+
+    // Standard Alexa Voice Request Handling
     const reqType = body?.request?.type;
 
     if (reqType === 'LaunchRequest') {
@@ -294,7 +352,7 @@ export async function POST(req) {
       const repromptText =
         'You can ask what day is today in kindergarten, when is the next day off, or when is Expo Weekend.';
 
-      await logToGoogleSheet('LaunchRequest', welcomeText, 'SUCCESS');
+      await logToGoogleSheet('[Alexa] LaunchRequest', welcomeText, 'SUCCESS');
       return formatAlexaSpeech(welcomeText, false, repromptText);
     }
 
@@ -305,7 +363,6 @@ export async function POST(req) {
       return formatAlexaSpeech('Goodbye!', true);
     }
 
-    // Extract slot values from Alexa request
     const slots = intent?.slots || {};
     for (const key of Object.keys(slots)) {
       if (slots[key]?.value) {
@@ -314,7 +371,6 @@ export async function POST(req) {
       }
     }
 
-    // Normalize carrier truncations & detect temporal keywords
     const lowerQ = userQuestion.toLowerCase();
     if (
       userQuestion.startsWith('it for ') ||
@@ -331,7 +387,7 @@ export async function POST(req) {
       if (intentName === 'AMAZON.FallbackIntent') {
         const fallbackText =
           'I did not understand that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
-        await logToGoogleSheet('Fallback: Unrecognized Utterance', fallbackText, 'FALLBACK');
+        await logToGoogleSheet('[Alexa] Fallback: Unrecognized Utterance', fallbackText, 'FALLBACK');
         return formatAlexaSpeech(fallbackText, true);
       }
       userQuestion = 'What day is it today in kindergarten?';
@@ -341,7 +397,7 @@ export async function POST(req) {
 
     if (!process.env.GEMINI_API_KEY) {
       const errText = 'The assistant is missing its API configuration.';
-      await logToGoogleSheet(userQuestion || 'Missing Config', errText, 'CONFIG_ERROR');
+      await logToGoogleSheet(`[Alexa] ${userQuestion || 'Missing Config'}`, errText, 'CONFIG_ERROR');
       return formatAlexaSpeech(errText, true);
     }
 
@@ -408,11 +464,11 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
       finalStatus = 'DEGRADED_FEEDS';
     }
 
-    await logToGoogleSheet(userQuestion, spokenAnswer, finalStatus);
+    await logToGoogleSheet(`[Alexa] ${userQuestion}`, spokenAnswer, finalStatus);
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
-    await logToGoogleSheet(userQuestion || 'Unhandled Exception', error.message, 'ERROR');
+    await logToGoogleSheet(`[Alexa] ${userQuestion || 'Unhandled Exception'}`, error.message, 'ERROR');
     return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.', true);
   }
 }
