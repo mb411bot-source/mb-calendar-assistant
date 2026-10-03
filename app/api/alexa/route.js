@@ -166,9 +166,7 @@ function formatAlexaSpeech(speechText, shouldEndSession = true, repromptText = n
 
   return new Response(JSON.stringify(responseBody), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json;charset=UTF-8'
-    }
+    headers: { 'Content-Type': 'application/json;charset=UTF-8' }
   });
 }
 
@@ -287,62 +285,6 @@ export async function POST(req) {
   try {
     const body = await req.json();
 
-    // SHIELD: Check if the request came from the Web UI instead of Alexa
-    const isWebRequest = Boolean((body?.question || body?.message || body?.prompt || body?.text) && !body?.request);
-
-    if (isWebRequest) {
-      userQuestion = (body?.question || body?.message || body?.prompt || body?.text || '').trim();
-
-      const todayEastern = getEasternDate(0);
-      const tomorrowEastern = getEasternDate(1);
-      const { schoolEvents: allEvents, schoolDaySchedule: allSchedules } = await getCalendarData();
-
-      const upcomingEvents = allEvents.filter((e) => (e.endDate || e.date) >= todayEastern.iso);
-      const upcomingSchedule = allSchedules.filter((e) => e.date >= todayEastern.iso);
-
-      const systemPrompt = `You are the helpful assistant for Moses Brown School. Answer clearly and concisely.`;
-      const userPrompt = `PARENT QUESTION:
-${userQuestion}
-
-TODAY: ${todayEastern.formatted} (${todayEastern.iso})
-TOMORROW: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
-
-ROTATING DAYS:
-${JSON.stringify(upcomingSchedule.slice(0, 60))}
-
-SCHOOL EVENTS:
-${JSON.stringify(upcomingEvents.slice(0, 150))}`;
-
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      let reply = "I couldn't find that on the calendar.";
-      const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
-
-      for (const model of modelsToTry) {
-        try {
-          const res = await ai.models.generateContent({
-            model: model,
-            contents: `${systemPrompt}\n\n${userPrompt}`
-          });
-          if (res?.text) {
-            reply = res.text;
-            break;
-          }
-        } catch (err) {
-          console.warn(`Model ${model} failed:`, err?.message);
-        }
-      }
-
-      await logToGoogleSheet(`[Web] ${userQuestion}`, reply, 'SUCCESS');
-
-      return Response.json({
-        answer: reply,
-        reply: reply,
-        message: reply,
-        text: reply,
-        response: reply
-      }, { status: 200 });
-    }
-
     // Standard Alexa Voice Request Handling
     const reqType = body?.request?.type;
 
@@ -438,7 +380,7 @@ UPCOMING SCHOOL EVENTS & CLOSURES (NEXT 150 EVENTS):
 ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash'];
     let spokenAnswer = null;
 
     for (const model of modelsToTry) {
