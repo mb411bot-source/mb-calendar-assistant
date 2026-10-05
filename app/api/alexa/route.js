@@ -288,12 +288,10 @@ export async function POST(req) {
     const body = await req.json();
     const reqType = body?.request?.type;
 
-    // Handle initial launch
+  // Handle initial launch
     if (reqType === 'LaunchRequest') {
-      const welcomeText =
-        'Welcome to the Moses Brown Assistant. What would you like to check? You can ask what day is today in kindergarten, or when is Expo Weekend.';
-      const repromptText =
-        'You can ask what day is today in kindergarten, when is the next day off, or when is Expo Weekend.';
+      const welcomeText = "Sure, what's your question?";
+      const repromptText = "What's your question?";
 
       await logToGoogleSheet('[Alexa] LaunchRequest', welcomeText, 'SUCCESS');
       return formatAlexaSpeech(welcomeText, false, repromptText);
