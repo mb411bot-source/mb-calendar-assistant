@@ -271,7 +271,8 @@ function answerFromKeywords(question, events) {
   if (synonym) {
     match = events.find((e) => synonym.title.test(e.title));
   } else {
-    const words = q.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
+    const words = q.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOPWORDS.has(w))
+      .map((w) => (w.length > 3 ? w.replace(/s$/, '') : w)); // so "shots" matches "Flu Shot Clinic"
     if (words.length > 0) {
       match = events.find((e) => words.every((w) => e.title.toLowerCase().includes(w)));
     }
@@ -285,7 +286,7 @@ function answerFromKeywords(question, events) {
 }
 
 // Ask the models with staggered starts instead of strictly one after another: the next
-// model is started as soon as the previous one errors, or after 1.5 seconds if it is
+// model is started as soon as the previous one errors, or after 1.2 seconds if it is
 // still thinking. The first model to produce text wins. This keeps one slow or
 // overloaded model from using up the whole Alexa time limit.
 function askModels(ai, models, contents, deadlineAt, errors) {
@@ -332,7 +333,7 @@ function askModels(ai, models, contents, deadlineAt, errors) {
         });
     };
     launch();
-    for (let i = 1; i < models.length; i++) timers.push(setTimeout(launch, i * 1500));
+    for (let i = 1; i < models.length; i++) timers.push(setTimeout(launch, i * 1200));
     timers.push(
       setTimeout(() => {
         errors.push('out of time');
@@ -570,7 +571,7 @@ UPCOMING SCHOOL EVENTS & CLOSURES (one per line: date or date range | time | tit
 ${upcomingEvents.slice(0, 300).map(eventLine).join('\n')}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'];
     const modelErrors = [];
     let spokenAnswer = await askModels(
       ai,
