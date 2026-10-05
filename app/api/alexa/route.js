@@ -26,6 +26,11 @@ let calendarCache = {
 };
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
+// Alexa drops the reply ("The requested skill did not provide a valid response")
+// if the endpoint takes longer than 8 seconds, so everything runs against a budget.
+const AI_DEADLINE_MS = 6000; // stop waiting on the AI model after this long
+const RESPONSE_BUDGET_MS = 7000; // never hold the reply past this for logging
+
 const kindergartenSubjects = {
   'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
   'Day 2': ['Math', 'Shop', 'social studies', 'fizz ed', 'Reading Groups', 'Science', 'Music'],
@@ -67,12 +72,12 @@ const cleanCalendarEvents = (events) => {
     .map((event) => {
       const startDate = new Date(event.start);
       const endDate = event.end ? new Date(event.end) : null;
-      const isAllDay = !event.start.getHours && !event.start.getMinutes;
+      const isAllDay = event.datetype === 'date';
       const startIso = extractIsoDate(event.start);
       const endIso = endDate ? extractIsoDate(endDate) : startIso;
 
       let timeString = 'All Day';
-      if (!isAllDay && typeof event.start.getHours === 'function') {
+      if (!isAllDay) {
         if (endDate && endDate > startDate) {
           timeString = `${formatTimeEastern(startDate)} to ${formatTimeEastern(endDate)}`;
         } else {
@@ -199,6 +204,78 @@ async function logToGoogleSheet(question, answer, status = 'OK') {
   }
 }
 
+// Log without delaying the spoken reply: hand the request to Vercel to finish in the
+// background when possible, otherwise wait only as long as the Alexa budget allows.
+function logSafely(startedAt, question, answer, status) {
+  const pending = logToGoogleSheet(question, answer, status);
+  const ctx = globalThis[Symbol.for('@vercel/request-context')]?.get?.();
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(pending);
+    return Promise.resolve();
+  }
+  const remaining = Math.max(200, RESPONSE_BUDGET_MS - (Date.now() - startedAt));
+  return Promise.race([pending, new Promise((resolve) => setTimeout(resolve, remaining))]);
+}
+
+const speakDate = (iso) =>
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric'
+  }).format(new Date(`${iso}T16:00:00Z`));
+
+// "Share day" is Meeting for Sharing, which is always Day 4. Answered straight from the
+// rotating schedule, with no AI call, so it is fast and cannot fail on a model outage.
+function answerShareDay(question, schedule, todayIso) {
+  if (!/\bshar(e|ing)\s+days?\b|meeting for sharing/i.test(question)) return null;
+  const shareDays = schedule.filter((d) => d.day === 'Day 4' && d.date >= todayIso);
+  if (shareDays.length === 0) return null;
+  if (shareDays[0].date === todayIso) {
+    const after = shareDays[1] ? ` The one after that is ${speakDate(shareDays[1].date)}.` : '';
+    return `Today is Day 4, so today is a share day.${after}`;
+  }
+  return `The next share day is ${speakDate(shareDays[0].date)}, which is a Day 4.`;
+}
+
+const EVENT_SYNONYMS = [
+  { ask: /christmas|winter|holiday (break|vacation|recess)/i, title: /winter (break|recess|vacation)|christmas|holiday (break|recess)/i },
+  { ask: /spring (break|vacation|recess)|march break/i, title: /spring (break|recess|vacation)/i },
+  { ask: /thanksgiving/i, title: /thanksgiving/i },
+  { ask: /expo|homecoming/i, title: /expo|homecoming/i },
+  { ask: /day off|no school|school closed/i, title: /no school|closed|holiday|break|recess|in-service/i }
+];
+const STOPWORDS = new Set(
+  'when what where is are the a an next this of for on in at to do does we have school day time start starts begin begins'.split(' ')
+);
+
+// Used only when the AI model fails or runs out of time: a plain keyword lookup so
+// common "when is ..." questions still get an answer.
+function answerFromKeywords(question, events) {
+  const q = question.toLowerCase();
+  let match = null;
+  const synonym = EVENT_SYNONYMS.find((s) => s.ask.test(q));
+  if (synonym) {
+    match = events.find((e) => synonym.title.test(e.title));
+  } else {
+    const words = q.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
+    if (words.length > 0) {
+      match = events.find((e) => words.every((w) => e.title.toLowerCase().includes(w)));
+    }
+  }
+  if (!match) return null;
+  if (match.endDate && match.endDate !== match.date) {
+    return `${match.title} runs from ${speakDate(match.date)} to ${speakDate(match.endDate)}.`;
+  }
+  const time = match.time && match.time !== 'All Day' ? ` at ${match.time}` : '';
+  return `${match.title} is on ${speakDate(match.date)}${time}.`;
+}
+
+const eventLine = (e) =>
+  [e.date === e.endDate || !e.endDate ? e.date : `${e.date} to ${e.endDate}`, e.time, e.title, e.location]
+    .filter(Boolean)
+    .join(' | ');
+
 async function fetchWithTimeout(url, timeoutMs = 3500) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -227,7 +304,7 @@ async function getCalendarData() {
   const rawParsedFeeds = await Promise.all(
     FEEDS.map(async (feed) => {
       try {
-        const res = await fetchWithTimeout(feed.url, 3500);
+        const res = await fetchWithTimeout(feed.url, 3000);
         if (!res.ok) {
           feedErrors.push(`${feed.name} HTTP ${res.status}`);
           return { name: feed.name, events: [] };
@@ -282,6 +359,7 @@ export async function GET() {
 }
 
 export async function POST(req) {
+  const startedAt = Date.now();
   let userQuestion = '';
 
   try {
@@ -293,7 +371,7 @@ export async function POST(req) {
       const welcomeText = "Sure, what's your question?";
       const repromptText = "What's your question?";
 
-      await logToGoogleSheet('[Alexa] LaunchRequest', welcomeText, 'SUCCESS');
+      await logSafely(startedAt, '[Alexa] LaunchRequest', welcomeText, 'SUCCESS');
       return formatAlexaSpeech(welcomeText, false, repromptText);
     }
 
@@ -330,7 +408,7 @@ export async function POST(req) {
         if (intentName === 'AMAZON.FallbackIntent') {
           const fallbackText =
             'I did not catch that. You can ask what day is today in kindergarten, what day is tomorrow, or when is Expo Weekend.';
-          await logToGoogleSheet('[Alexa] Fallback', fallbackText, 'FALLBACK');
+          await logSafely(startedAt, '[Alexa] Fallback', fallbackText, 'FALLBACK');
           return formatAlexaSpeech(fallbackText, true);
         }
         userQuestion = 'What day is it today in kindergarten?';
@@ -341,7 +419,7 @@ export async function POST(req) {
 
     if (!process.env.GEMINI_API_KEY) {
       const errText = 'The assistant is missing its API configuration.';
-      await logToGoogleSheet(`[Alexa] ${userQuestion || 'Missing Config'}`, errText, 'CONFIG_ERROR');
+      await logSafely(startedAt, `[Alexa] ${userQuestion || 'Missing Config'}`, errText, 'CONFIG_ERROR');
       return formatAlexaSpeech(errText, true);
     }
 
@@ -352,6 +430,12 @@ export async function POST(req) {
 
     const upcomingEvents = allEvents.filter((e) => (e.endDate || e.date) >= todayEastern.iso);
     const upcomingSchedule = allSchedules.filter((e) => e.date >= todayEastern.iso);
+
+    const shareDayAnswer = answerShareDay(userQuestion, upcomingSchedule, todayEastern.iso);
+    if (shareDayAnswer) {
+      await logSafely(startedAt, `[Alexa] ${userQuestion}`, shareDayAnswer, 'SUCCESS');
+      return formatAlexaSpeech(shareDayAnswer, true);
+    }
 
     const systemPrompt = `You are the Moses Brown School Voice Assistant.
 Your answer will be spoken aloud to parents by an Amazon Echo device:
@@ -365,7 +449,7 @@ Your answer will be spoken aloud to parents by an Amazon Echo device:
 8. Handle school events with flexible keyword matching:
    - "Expo", "Expo Weekend", "Homecoming", "Fall Expo": Match any event containing "Expo" or "Homecoming".
    - "Spring Break": Match any multi-day break/closures in March or April.
-   - "Winter Break" / "Christmas Break": Match multi-day closures in late December / early January.
+   - "Winter Break" / "Christmas Break" / "Christmas Vacation" / "Holiday Break": Match multi-day closures in late December / early January.
    - "Next day off": Find the nearest upcoming date with "No School", "Closed", "Holiday", "Break", or "In-Service".
 9. When answering an event query, clearly state the date (e.g., Friday, October 16th), time if applicable, and title.`;
 
@@ -378,41 +462,67 @@ TOMORROW'S DATE: ${tomorrowEastern.formatted} (${tomorrowEastern.iso})
 UPCOMING ROTATING DAYS (NEXT 60 DAYS):
 ${JSON.stringify(upcomingSchedule.slice(0, 60))}
 
-UPCOMING SCHOOL EVENTS & CLOSURES (NEXT 150 EVENTS):
-${JSON.stringify(upcomingEvents.slice(0, 150))}`;
+UPCOMING SCHOOL EVENTS & CLOSURES (one per line: date or date range | time | title | location):
+${upcomingEvents.slice(0, 300).map(eventLine).join('\n')}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
     let spokenAnswer = null;
+    const modelErrors = [];
 
     for (const model of modelsToTry) {
+      const remaining = AI_DEADLINE_MS - (Date.now() - startedAt);
+      if (remaining < 700) {
+        modelErrors.push('out of time');
+        break;
+      }
+      const controller = new AbortController();
+      let timer;
       try {
-        const res = await ai.models.generateContent({
-          model: model,
-          contents: `${systemPrompt}\n\n${userPrompt}`
-        });
+        const res = await Promise.race([
+          ai.models.generateContent({
+            model: model,
+            contents: `${systemPrompt}\n\n${userPrompt}`,
+            config: { abortSignal: controller.signal, temperature: 0.2 }
+          }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timed out after ${remaining}ms`)), remaining);
+          })
+        ]);
         if (res?.text) {
           spokenAnswer = res.text;
           break;
         }
+        modelErrors.push(`${model}: empty response`);
       } catch (err) {
+        controller.abort();
         console.error(`Model ${model} failed:`, err?.message);
+        modelErrors.push(`${model}: ${(err?.message || 'error').slice(0, 80)}`);
+      } finally {
+        clearTimeout(timer);
       }
     }
 
     let finalStatus = 'SUCCESS';
     if (!spokenAnswer) {
-      finalStatus = 'AI_FAILURE';
-      spokenAnswer = 'Sorry, I could not find that on the school calendar right now.';
+      // The reason goes in the sheet's Status column so failures can be diagnosed.
+      const reason = modelErrors.join('; ').slice(0, 200);
+      spokenAnswer = answerFromKeywords(userQuestion, upcomingEvents);
+      if (spokenAnswer) {
+        finalStatus = `AI_FAILURE_KEYWORD_FALLBACK (${reason})`;
+      } else {
+        finalStatus = `AI_FAILURE (${reason})`;
+        spokenAnswer = 'Sorry, I could not find that on the school calendar right now.';
+      }
     } else if (feedErrors && feedErrors.length > 0) {
       finalStatus = 'DEGRADED_FEEDS';
     }
 
-    await logToGoogleSheet(`[Alexa] ${userQuestion}`, spokenAnswer, finalStatus);
+    await logSafely(startedAt, `[Alexa] ${userQuestion}`, spokenAnswer, finalStatus);
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
-    await logToGoogleSheet(`[Alexa] ${userQuestion || 'Unhandled Exception'}`, error.message, 'ERROR');
+    await logSafely(startedAt, `[Alexa] ${userQuestion || 'Unhandled Exception'}`, error.message, 'ERROR');
     return formatAlexaSpeech('Sorry, I encountered an issue retrieving the school schedule.', true);
   }
 }
