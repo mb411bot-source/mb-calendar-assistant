@@ -24,7 +24,7 @@ let calendarCache = {
   schoolEvents: [],
   schoolDaySchedule: []
 };
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15-minute cache
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 const kindergartenSubjects = {
   'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
@@ -288,7 +288,7 @@ export async function POST(req) {
     const body = await req.json();
     const reqType = body?.request?.type;
 
-  // Handle initial launch
+    // Handle initial launch ("open moses brown assistant")
     if (reqType === 'LaunchRequest') {
       const welcomeText = "Sure, what's your question?";
       const repromptText = "What's your question?";
@@ -382,7 +382,7 @@ UPCOMING SCHOOL EVENTS & CLOSURES (NEXT 150 EVENTS):
 ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
     let spokenAnswer = null;
 
     for (const model of modelsToTry) {
@@ -396,7 +396,7 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
           break;
         }
       } catch (err) {
-        console.warn(`Model ${model} failed:`, err?.message);
+        console.error(`Model ${model} failed:`, err?.message);
       }
     }
 
