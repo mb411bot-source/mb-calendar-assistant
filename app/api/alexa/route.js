@@ -24,7 +24,7 @@ let calendarCache = {
   schoolEvents: [],
   schoolDaySchedule: []
 };
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15-minute cache
 
 const kindergartenSubjects = {
   'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
@@ -166,7 +166,9 @@ function formatAlexaSpeech(speechText, shouldEndSession = true, repromptText = n
 
   return new Response(JSON.stringify(responseBody), {
     status: 200,
-    headers: { 'Content-Type': 'application/json;charset=UTF-8' }
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8'
+    }
   });
 }
 
@@ -284,10 +286,9 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-
-    // Standard Alexa Voice Request Handling
     const reqType = body?.request?.type;
 
+    // Handle initial launch
     if (reqType === 'LaunchRequest') {
       const welcomeText =
         'Welcome to the Moses Brown Assistant. What would you like to check? You can ask what day is today in kindergarten, or when is Expo Weekend.';
@@ -305,36 +306,39 @@ export async function POST(req) {
       return formatAlexaSpeech('Goodbye!', true);
     }
 
+    // Extract captured slot value across any configured slot names
     const slots = intent?.slots || {};
+    let capturedPhrase = '';
     for (const key of Object.keys(slots)) {
       if (slots[key]?.value) {
-        userQuestion = slots[key].value.trim();
+        capturedPhrase = slots[key].value.trim();
         break;
       }
     }
 
-    const lowerQ = userQuestion.toLowerCase();
-    if (
-      userQuestion.startsWith('it for ') ||
-      userQuestion.startsWith('it today') ||
-      userQuestion.startsWith('it tomorrow') ||
-      userQuestion.startsWith('is it today') ||
-      userQuestion.startsWith('is it tomorrow') ||
-      userQuestion.startsWith('day is it')
-    ) {
-      userQuestion = `What day ${userQuestion.replace(/^day /, '')}`;
-    }
-
-    if (!userQuestion) {
-      if (intentName === 'AMAZON.FallbackIntent') {
-        const fallbackText =
-          'I did not understand that. You can ask what day is today in kindergarten, what day is tomorrow, or when is the next day off.';
-        await logToGoogleSheet('[Alexa] Fallback: Unrecognized Utterance', fallbackText, 'FALLBACK');
-        return formatAlexaSpeech(fallbackText, true);
+    // Reconstruct full semantic question based on intent name
+    if (intentName === 'WhenIsIntent') {
+      userQuestion = capturedPhrase ? `When is ${capturedPhrase}?` : 'When is the next school event?';
+    } else if (intentName === 'WhatIsIntent') {
+      const lower = capturedPhrase.toLowerCase();
+      if (lower.startsWith('day ') || lower === 'today' || lower === 'tomorrow') {
+        userQuestion = `What day is it ${capturedPhrase} in kindergarten?`;
+      } else {
+        userQuestion = capturedPhrase ? `What is ${capturedPhrase}?` : 'What day is it today in kindergarten?';
       }
-      userQuestion = 'What day is it today in kindergarten?';
-    } else if (lowerQ.includes('tomorrow') && !lowerQ.includes('what day') && !lowerQ.includes('schedule')) {
-      userQuestion = 'What is the schedule tomorrow for kindergarten?';
+    } else {
+      // Legacy AskSchoolIntent or FallbackIntent
+      if (!capturedPhrase) {
+        if (intentName === 'AMAZON.FallbackIntent') {
+          const fallbackText =
+            'I did not catch that. You can ask what day is today in kindergarten, what day is tomorrow, or when is Expo Weekend.';
+          await logToGoogleSheet('[Alexa] Fallback', fallbackText, 'FALLBACK');
+          return formatAlexaSpeech(fallbackText, true);
+        }
+        userQuestion = 'What day is it today in kindergarten?';
+      } else {
+        userQuestion = capturedPhrase;
+      }
     }
 
     if (!process.env.GEMINI_API_KEY) {
@@ -380,7 +384,7 @@ UPCOMING SCHOOL EVENTS & CLOSURES (NEXT 150 EVENTS):
 ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash'];
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
     let spokenAnswer = null;
 
     for (const model of modelsToTry) {
