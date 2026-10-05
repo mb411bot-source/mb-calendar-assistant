@@ -271,6 +271,85 @@ function answerFromKeywords(question, events) {
   return `${match.title} is on ${speakDate(match.date)}${time}.`;
 }
 
+// Ask the models with staggered starts instead of strictly one after another: the next
+// model is started as soon as the previous one errors, or after 1.5 seconds if it is
+// still thinking. The first model to produce text wins. This keeps one slow or
+// overloaded model from using up the whole Alexa time limit.
+function askModels(ai, models, contents, deadlineAt, errors) {
+  return new Promise((resolve) => {
+    let done = false;
+    let pending = 0;
+    let next = 0;
+    const controllers = [];
+    const timers = [];
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      timers.forEach(clearTimeout);
+      controllers.forEach((c) => c.abort());
+      resolve(value);
+    };
+    const launch = () => {
+      if (done || next >= models.length) return;
+      const model = models[next++];
+      const controller = new AbortController();
+      controllers.push(controller);
+      pending++;
+      Promise.resolve()
+        .then(() =>
+          ai.models.generateContent({
+            model,
+            contents,
+            config: { abortSignal: controller.signal, temperature: 0.2 }
+          })
+        )
+        .then((res) => {
+          if (!res?.text) throw new Error('empty response');
+          finish(res.text);
+        })
+        .catch((err) => {
+          if (done) return;
+          const raw = String(err?.message || 'error');
+          const short = (raw.match(/"message":\s*"([^"]+)/)?.[1] || raw).slice(0, 70);
+          console.error(`Model ${model} failed:`, raw);
+          errors.push(`${model}: ${short}`);
+          pending--;
+          if (next < models.length) launch();
+          else if (pending === 0) finish(null);
+        });
+    };
+    launch();
+    for (let i = 1; i < models.length; i++) timers.push(setTimeout(launch, i * 1500));
+    timers.push(
+      setTimeout(() => {
+        errors.push('out of time');
+        finish(null);
+      }, Math.max(0, deadlineAt - Date.now()))
+    );
+  });
+}
+
+// "What day is it today / tomorrow in kindergarten" is answered straight from the
+// rotating schedule, with no AI call.
+function answerRotatingDay(question, schedule, today, tomorrow) {
+  const q = question.toLowerCase();
+  const which = /\btomorrow\b/.test(q) ? 'tomorrow' : /\btoday\b/.test(q) ? 'today' : null;
+  if (!which || schedule.length === 0) return null;
+  if (!/what day|which day|day number|rotating|subjects|specials|in kindergarten|kindergarten (today|tomorrow)/.test(q)) {
+    return null;
+  }
+  const target = which === 'today' ? today : tomorrow;
+  const entry = schedule.find((d) => d.date === target.iso);
+  if (!entry) return null;
+  const subjects = entry.subjects || [];
+  const list =
+    subjects.length > 1
+      ? `${subjects.slice(0, -1).join(', ')}, and ${subjects[subjects.length - 1]}`
+      : subjects.join('');
+  const lead = which === 'today' ? `Today is ${entry.day}.` : `Tomorrow, ${target.weekday}, is ${entry.day}.`;
+  return list ? `${lead} Kindergarten has ${list}.` : lead;
+}
+
 const eventLine = (e) =>
   [e.date === e.endDate || !e.endDate ? e.date : `${e.date} to ${e.endDate}`, e.time, e.title, e.location]
     .filter(Boolean)
@@ -431,10 +510,12 @@ export async function POST(req) {
     const upcomingEvents = allEvents.filter((e) => (e.endDate || e.date) >= todayEastern.iso);
     const upcomingSchedule = allSchedules.filter((e) => e.date >= todayEastern.iso);
 
-    const shareDayAnswer = answerShareDay(userQuestion, upcomingSchedule, todayEastern.iso);
-    if (shareDayAnswer) {
-      await logSafely(startedAt, `[Alexa] ${userQuestion}`, shareDayAnswer, 'SUCCESS');
-      return formatAlexaSpeech(shareDayAnswer, true);
+    const directAnswer =
+      answerShareDay(userQuestion, upcomingSchedule, todayEastern.iso) ||
+      answerRotatingDay(userQuestion, upcomingSchedule, todayEastern, tomorrowEastern);
+    if (directAnswer) {
+      await logSafely(startedAt, `[Alexa] ${userQuestion}`, directAnswer, 'SUCCESS_NO_AI');
+      return formatAlexaSpeech(directAnswer, true);
     }
 
     const systemPrompt = `You are the Moses Brown School Voice Assistant.
@@ -467,46 +548,25 @@ ${upcomingEvents.slice(0, 300).map(eventLine).join('\n')}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
-    let spokenAnswer = null;
     const modelErrors = [];
-
-    for (const model of modelsToTry) {
-      const remaining = AI_DEADLINE_MS - (Date.now() - startedAt);
-      if (remaining < 700) {
-        modelErrors.push('out of time');
-        break;
-      }
-      const controller = new AbortController();
-      let timer;
-      try {
-        const res = await Promise.race([
-          ai.models.generateContent({
-            model: model,
-            contents: `${systemPrompt}\n\n${userPrompt}`,
-            config: { abortSignal: controller.signal, temperature: 0.2 }
-          }),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`timed out after ${remaining}ms`)), remaining);
-          })
-        ]);
-        if (res?.text) {
-          spokenAnswer = res.text;
-          break;
-        }
-        modelErrors.push(`${model}: empty response`);
-      } catch (err) {
-        controller.abort();
-        console.error(`Model ${model} failed:`, err?.message);
-        modelErrors.push(`${model}: ${(err?.message || 'error').slice(0, 80)}`);
-      } finally {
-        clearTimeout(timer);
-      }
-    }
+    let spokenAnswer = await askModels(
+      ai,
+      modelsToTry,
+      `${systemPrompt}\n\n${userPrompt}`,
+      startedAt + AI_DEADLINE_MS,
+      modelErrors
+    );
 
     let finalStatus = 'SUCCESS';
     if (!spokenAnswer) {
       // The reason goes in the sheet's Status column so failures can be diagnosed.
-      const reason = modelErrors.join('; ').slice(0, 200);
+      const feedNote =
+        feedErrors && feedErrors.length > 0
+          ? `; FEEDS: ${feedErrors.join(', ')}`
+          : upcomingSchedule.length === 0
+            ? '; FEEDS: rotating schedule is empty'
+            : '';
+      const reason = `${modelErrors.join('; ')}${feedNote}`.slice(0, 400);
       spokenAnswer = answerFromKeywords(userQuestion, upcomingEvents);
       if (spokenAnswer) {
         finalStatus = `AI_FAILURE_KEYWORD_FALLBACK (${reason})`;
