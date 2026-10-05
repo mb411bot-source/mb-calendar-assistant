@@ -465,11 +465,18 @@ export async function POST(req) {
     const slots = intent?.slots || {};
     let capturedPhrase = '';
     for (const key of Object.keys(slots)) {
-      if (slots[key]?.value) {
-        capturedPhrase = slots[key].value.trim();
+      const slotValue = slots[key]?.value || slots[key]?.slotValue?.value;
+      if (slotValue) {
+        capturedPhrase = String(slotValue).trim();
         break;
       }
     }
+
+    // When Alexa sends no captured phrase, record what it did send so the skill's
+    // interaction model can be diagnosed from the sheet's Status column.
+    const requestNote = capturedPhrase
+      ? ''
+      : ` [no phrase captured: type=${reqType} intent=${intentName || 'none'} slots=${JSON.stringify(slots).slice(0, 150)}]`;
 
     // Reconstruct full semantic question based on intent name
     if (intentName === 'WhenIsIntent') {
@@ -514,7 +521,7 @@ export async function POST(req) {
       answerShareDay(userQuestion, upcomingSchedule, todayEastern.iso) ||
       answerRotatingDay(userQuestion, upcomingSchedule, todayEastern, tomorrowEastern);
     if (directAnswer) {
-      await logSafely(startedAt, `[Alexa] ${userQuestion}`, directAnswer, 'SUCCESS_NO_AI');
+      await logSafely(startedAt, `[Alexa] ${userQuestion}`, directAnswer, `SUCCESS_NO_AI${requestNote}`);
       return formatAlexaSpeech(directAnswer, true);
     }
 
@@ -578,7 +585,7 @@ ${upcomingEvents.slice(0, 300).map(eventLine).join('\n')}`;
       finalStatus = 'DEGRADED_FEEDS';
     }
 
-    await logSafely(startedAt, `[Alexa] ${userQuestion}`, spokenAnswer, finalStatus);
+    await logSafely(startedAt, `[Alexa] ${userQuestion}`, spokenAnswer, `${finalStatus}${requestNote}`);
     return formatAlexaSpeech(spokenAnswer, true);
   } catch (error) {
     console.error('Alexa endpoint error:', error);
