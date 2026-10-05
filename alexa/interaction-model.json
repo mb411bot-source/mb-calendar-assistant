@@ -1,0 +1,154 @@
+{
+    "interactionModel": {
+        "languageModel": {
+            "invocationName": "moses brown assistant",
+            "intents": [
+                {
+                    "name": "AMAZON.CancelIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.HelpIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StopIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NavigateHomeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.FallbackIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AskSchoolIntent",
+                    "slots": [
+                        {
+                            "name": "Question",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "ask {Question}"
+                    ]
+                },
+                {
+                    "name": "WhenIsIntent",
+                    "slots": [
+                        {
+                            "name": "EventQuery",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "what time is {EventQuery}",
+                        "what date is {EventQuery}",
+                        "when do we have {EventQuery}",
+                        "when are {EventQuery}",
+                        "when is {EventQuery}"
+                    ]
+                },
+                {
+                    "name": "WhenDoesIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "when does {Query}"
+                    ]
+                },
+                {
+                    "name": "WhatDayIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "what day is {Query}"
+                    ]
+                },
+                {
+                    "name": "WhatIsIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "what is {Query}"
+                    ]
+                },
+                {
+                    "name": "WhatSpecialsIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "what specials {Query}"
+                    ]
+                },
+                {
+                    "name": "IsThereIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "is there {Query}"
+                    ]
+                },
+                {
+                    "name": "IsTodayIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "is today {Query}"
+                    ]
+                },
+                {
+                    "name": "DoWeHaveIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "do we have {Query}"
+                    ]
+                },
+                {
+                    "name": "TellMeAboutIntent",
+                    "slots": [
+                        {
+                            "name": "Query",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "tell me about {Query}"
+                    ]
+                }
+            ],
+            "types": []
+        }
+    }
+}

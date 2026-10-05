@@ -124,6 +124,19 @@ const getEasternDate = (daysFromToday = 0) => {
   };
 };
 
+// Alexa only passes along the words captured by an intent's slot, not the words around
+// it. Each of these intents has one fixed lead-in in the interaction model
+// (alexa/interaction-model.json), so the full question is rebuilt from it here.
+const INTENT_PREFIXES = {
+  WhatDayIntent: 'What day is',
+  WhenDoesIntent: 'When does',
+  IsThereIntent: 'Is there',
+  IsTodayIntent: 'Is today',
+  DoWeHaveIntent: 'Do we have',
+  WhatSpecialsIntent: 'What specials',
+  TellMeAboutIntent: 'Tell me about'
+};
+
 function formatAlexaSpeech(speechText, shouldEndSession = true, repromptText = null) {
   let cleanSpeech = (speechText || 'I do not have that information right now.')
     .replace(/[*_#`\n\r]/g, ' ')
@@ -479,7 +492,10 @@ export async function POST(req) {
       : ` [no phrase captured: type=${reqType} intent=${intentName || 'none'} slots=${JSON.stringify(slots).slice(0, 150)}]`;
 
     // Reconstruct full semantic question based on intent name
-    if (intentName === 'WhenIsIntent') {
+    const carrierPrefix = INTENT_PREFIXES[intentName];
+    if (carrierPrefix && capturedPhrase) {
+      userQuestion = `${carrierPrefix} ${capturedPhrase}?`;
+    } else if (intentName === 'WhenIsIntent') {
       userQuestion = capturedPhrase ? `When is ${capturedPhrase}?` : 'When is the next school event?';
     } else if (intentName === 'WhatIsIntent') {
       const lower = capturedPhrase.toLowerCase();
