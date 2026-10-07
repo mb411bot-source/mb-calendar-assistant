@@ -1,5 +1,9 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
+
+// Give up on the AI after this long so the page always gets a reply.
+const AI_DEADLINE_MS = 20000;
 
 import ical from 'node-ical';
 import { GoogleGenAI } from '@google/genai';
@@ -115,7 +119,7 @@ function logToGoogleSheet(question, answer, status = 'OK') {
   const webhookUrl = process.env.GOOGLE_SHEET_WEBHOOK_URL;
   if (!webhookUrl) return;
 
-  fetch(webhookUrl, {
+  const pending = fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -126,7 +130,71 @@ function logToGoogleSheet(question, answer, status = 'OK') {
     }),
     redirect: 'follow'
   }).catch((err) => console.error('Sheet logging error:', err?.message));
+
+  // Ask Vercel to keep the function alive until the log request finishes; without this
+  // the row can be dropped once the reply has been sent.
+  const ctx = globalThis[Symbol.for('@vercel/request-context')]?.get?.();
+  if (ctx?.waitUntil) ctx.waitUntil(pending);
 }
+
+// Ask the models with staggered starts instead of strictly one after another: the next
+// model is started as soon as the previous one errors, or after 2 seconds if it is
+// still thinking. The first model to produce text wins. This keeps one slow or
+// overloaded model from using up the whole time limit and leaving the page waiting.
+function askModels(ai, models, contents, deadlineAt, errors) {
+  return new Promise((resolve) => {
+    let done = false;
+    let pending = 0;
+    let next = 0;
+    const controllers = [];
+    const timers = [];
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      timers.forEach(clearTimeout);
+      controllers.forEach((c) => c.abort());
+      resolve(value);
+    };
+    const launch = () => {
+      if (done || next >= models.length) return;
+      const model = models[next++];
+      const controller = new AbortController();
+      controllers.push(controller);
+      pending++;
+      Promise.resolve()
+        .then(() =>
+          ai.models.generateContent({
+            model,
+            contents,
+            config: { abortSignal: controller.signal, temperature: 0.2 }
+          })
+        )
+        .then((res) => {
+          if (!res?.text) throw new Error('empty response');
+          finish(res.text);
+        })
+        .catch((err) => {
+          if (done) return;
+          const raw = String(err?.message || 'error');
+          const short = (raw.match(/"message":\s*"([^"]+)/)?.[1] || raw).slice(0, 70);
+          console.error(`Model ${model} failed:`, raw);
+          errors.push(`${model}: ${short}`);
+          pending--;
+          if (next < models.length) launch();
+          else if (pending === 0) finish(null);
+        });
+    };
+    launch();
+    for (let i = 1; i < models.length; i++) timers.push(setTimeout(launch, i * 2000));
+    timers.push(
+      setTimeout(() => {
+        errors.push('out of time');
+        finish(null);
+      }, Math.max(0, deadlineAt - Date.now()))
+    );
+  });
+}
+
 
 async function getCalendarData() {
   const now = Date.now();
@@ -180,6 +248,7 @@ export async function GET() {
 }
 
 export async function POST(req) {
+  const startedAt = Date.now();
   let userQuestion = '';
 
   try {
@@ -237,26 +306,15 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
       'gemini-3.5-flash',
       'gemini-3.5-flash-lite'
     ];
-    let reply = null;
-    let errorsCaptured = [];
-
-    for (const model of modelsToTry) {
-      try {
-        const response = await ai.models.generateContent({
-          model: model,
-          contents: `${systemPrompt}\n\n${userPrompt}`
-        });
-
-        const textOutput = response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (textOutput && textOutput.trim().length > 0) {
-          reply = textOutput.trim();
-          break;
-        }
-      } catch (err) {
-        console.warn(`Model ${model} failed:`, err?.message);
-        errorsCaptured.push(`${model}: ${err?.message || 'failed'}`);
-      }
-    }
+    const errorsCaptured = [];
+    let reply = await askModels(
+      ai,
+      modelsToTry,
+      `${systemPrompt}\n\n${userPrompt}`,
+      startedAt + AI_DEADLINE_MS,
+      errorsCaptured
+    );
+    if (reply) reply = reply.trim();
 
     if (!reply) {
       const todayScheduleMatch = upcomingSchedule.find((s) => s.date === todayEastern.iso);
