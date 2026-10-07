@@ -243,6 +243,16 @@ async function getCalendarData() {
   return { schoolEvents: calendarCache.schoolEvents, schoolDaySchedule: calendarCache.schoolDaySchedule };
 }
 
+// The page shows replies as plain text, so markdown from the model would appear as
+// literal asterisks. Turn "* item" bullets into "- item" and drop every other asterisk.
+function stripAsterisks(text) {
+  return String(text || '')
+    .replace(/^[ \t]*\*[ \t]+/gm, '- ')
+    .replace(/\*/g, '')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
 export async function GET() {
   return Response.json({ status: 'online', service: 'Moses Brown Web Chat Endpoint' });
 }
@@ -284,7 +294,8 @@ export async function POST(req) {
 2. For rotating day queries (today/tomorrow), state the day number (Day 1 - Day 7) and kindergarten subjects first.
 3. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4). Check the upcoming rotating days for the next Day 4 date.
 4. For breaks/holidays (Winter Break, Spring Break, next day off), state the exact dates and class resumption dates.
-5. For events like Expo Weekend or Homecoming, list dates, times, and locations clearly.`;
+5. For events like Expo Weekend or Homecoming, list dates, times, and locations clearly.
+6. Write plain text only. Do not use markdown or asterisks. For a list, start each line with a hyphen.`;
 
     const userPrompt = `PARENT QUESTION:
 ${userQuestion}
@@ -314,7 +325,7 @@ ${JSON.stringify(upcomingEvents.slice(0, 150))}`;
       startedAt + AI_DEADLINE_MS,
       errorsCaptured
     );
-    if (reply) reply = reply.trim();
+    if (reply) reply = stripAsterisks(reply);
 
     if (!reply) {
       const todayScheduleMatch = upcomingSchedule.find((s) => s.date === todayEastern.iso);
