@@ -468,6 +468,16 @@ export async function POST(req) {
       return formatAlexaSpeech(welcomeText, false, repromptText);
     }
 
+    // Alexa sends this when a session closes (for example the skill was opened and nobody
+    // spoke). It is a notification, not a question: reply with an empty response and do
+    // not log it or look anything up.
+    if (reqType === 'SessionEndedRequest') {
+      return new Response(JSON.stringify({ version: '1.0', response: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json;charset=UTF-8' }
+      });
+    }
+
     const intent = body?.request?.intent;
     const intentName = intent?.name;
 
