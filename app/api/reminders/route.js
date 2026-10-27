@@ -14,7 +14,16 @@ export async function GET(req) {
 
   try {
     const result = await buildReminder(type, today);
-    return Response.json({ type, send: Boolean(result.send), text: result.text || '', reason: result.reason || '' });
+    const text = result.text || '';
+    return Response.json({
+      type,
+      send: Boolean(result.send),
+      text,
+      // The text as a JSON string (quotes and line breaks escaped), so Make can drop it
+      // straight into the WhatsApp request body.
+      textJson: JSON.stringify(text),
+      reason: result.reason || ''
+    });
   } catch (err) {
     return Response.json({ type, send: false, text: '', reason: `Error: ${err.message}` }, { status: 500 });
   }
