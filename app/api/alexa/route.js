@@ -153,11 +153,12 @@ function formatAlexaSpeech(speechText, shouldEndSession = true, repromptText = n
 
   // Say "PE" letter by letter ("P, E"). This runs after the clean-up above, which
   // removes angle brackets, so the SSML tag added here is kept.
-  const spokenPE = '<say-as interpret-as="characters">PE</say-as>';
+  // A placeholder is used first so the "PE" inside the tag is never matched again.
   cleanSpeech = cleanSpeech
-    .replace(/\bP\.\s?E\.(?=\s+[a-z])/g, spokenPE) // "P.E. and Music": drop the dot mid-sentence
-    .replace(/\bP\.?\s?E\b/g, spokenPE)
-    .replace(/\bPhysical Education\b|\bfizz ed\b/gi, spokenPE);
+    .replace(/\bP\.\s?E\.(?=\s+[a-z])/g, '\u0000PE\u0000') // "P.E. and Music": drop the dot mid-sentence
+    .replace(/\bP\.?\s?E\b/g, '\u0000PE\u0000')
+    .replace(/\bPhysical Education\b|\bfizz ed\b/gi, '\u0000PE\u0000')
+    .replace(/\u0000+PE\u0000+/g, '<say-as interpret-as="characters">PE</say-as>');
 
   const responseBody = {
     version: '1.0',
