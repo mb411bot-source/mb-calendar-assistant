@@ -32,13 +32,13 @@ const AI_DEADLINE_MS = 6000; // stop waiting on the AI model after this long
 const RESPONSE_BUDGET_MS = 7000; // never hold the reply past this for logging
 
 const kindergartenSubjects = {
-  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'fizz ed'],
-  'Day 2': ['Math', 'Shop', 'social studies', 'fizz ed', 'Reading Groups', 'Science', 'Music'],
-  'Day 3': ['Math', 'social studies', 'Community Time', 'fizz ed', 'Art', 'English Language Arts'],
+  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'PE'],
+  'Day 2': ['Math', 'Shop', 'social studies', 'PE', 'Reading Groups', 'Science', 'Music'],
+  'Day 3': ['Math', 'social studies', 'Community Time', 'PE', 'Art', 'English Language Arts'],
   'Day 4': ['English Language Arts', 'Tech', 'Science', 'social studies', 'Music', 'Math', 'Meeting for Sharing'],
   'Day 5': ['English Language Arts', 'Art', 'Math', 'social studies', 'Library', 'Spanish'],
-  'Day 6': ['Tech', 'Math', 'Reading Groups', 'fizz ed', 'social studies', 'Music', 'Art', 'English Language Arts'],
-  'Day 7': ['Math', 'Meeting for Business', 'fizz ed', 'Library', 'social studies', 'English Language Arts', 'Spanish']
+  'Day 6': ['Tech', 'Math', 'Reading Groups', 'PE', 'social studies', 'Music', 'Art', 'English Language Arts'],
+  'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'social studies', 'English Language Arts', 'Spanish']
 };
 
 const formatTimeEastern = (d) =>
@@ -149,9 +149,16 @@ function formatAlexaSpeech(speechText, shouldEndSession = true, repromptText = n
 
   cleanSpeech = cleanSpeech
     .replace(/\bELA\b/gi, 'English Language Arts')
-    .replace(/\bPE\b/gi, 'fizz ed')
-    .replace(/\bSS\b/gi, 'social studies')
-    .replace(/\bPhysical Education\b/gi, 'fizz ed');
+    .replace(/\bSS\b/gi, 'social studies');
+
+  // Say "PE" letter by letter ("P, E"). This runs after the clean-up above, which
+  // removes angle brackets, so the SSML tag added here is kept.
+  // A placeholder is used first so the "PE" inside the tag is never matched again.
+  cleanSpeech = cleanSpeech
+    .replace(/\bP\.\s?E\.(?=\s+[a-z])/g, '\u0000PE\u0000') // "P.E. and Music": drop the dot mid-sentence
+    .replace(/\bP\.?\s?E\b/g, '\u0000PE\u0000')
+    .replace(/\bPhysical Education\b|\bfizz ed\b/gi, '\u0000PE\u0000')
+    .replace(/\u0000+PE\u0000+/g, '<say-as interpret-as="characters">PE</say-as>');
 
   const responseBody = {
     version: '1.0',
@@ -557,7 +564,7 @@ Your answer will be spoken aloud to parents by an Amazon Echo device:
 1. Answer concisely in 1 or 2 natural spoken sentences.
 2. DO NOT use markdown, asterisks, bullet points, brackets, quotation marks, or special characters.
 3. Be direct, clear, and friendly.
-4. When stating subjects, say "English Language Arts" instead of ELA, "social studies" instead of SS, and "fizz ed" instead of PE.
+4. When stating subjects, say "English Language Arts" instead of ELA, "social studies" instead of SS, and "PE" for physical education.
 5. If the parent asks about today, state today's rotating day (e.g. Day 6) and kindergarten subjects.
 6. If the parent asks about tomorrow, state tomorrow's rotating day (e.g. Day 7) and kindergarten subjects.
 7. "Sharing Day" or "Share Day" refers to "Meeting for Sharing" (Day 4).
