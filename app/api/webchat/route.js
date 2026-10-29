@@ -6,6 +6,7 @@ export const maxDuration = 30;
 const AI_DEADLINE_MS = 20000;
 
 import ical from 'node-ical';
+import { recurringEventsFor } from '../../../lib/recurringEvents';
 import { GoogleGenAI } from '@google/genai';
 
 const FEEDS = [
@@ -226,7 +227,7 @@ async function getCalendarData() {
   const cleanCalendar2 = cleanCalendarEvents(rawParsedFeeds[1].events);
   const cleanCalendar3 = cleanCalendarEvents(rawParsedFeeds[2].events);
 
-  const schoolEvents = [...cleanCalendar1, ...cleanCalendar2].sort((a, b) => a.date.localeCompare(b.date));
+  const feedEvents = [...cleanCalendar1, ...cleanCalendar2];
   const schoolDaySchedule = cleanCalendar3
     .filter((event) => event.rotatingDay)
     .map((event) => ({
@@ -235,6 +236,14 @@ async function getCalendarData() {
       subjects: kindergartenSubjects[event.rotatingDay] || []
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  // Standing events that aren't on the school's feeds (lib/recurringEvents.js), added on school days.
+  const weeklyEvents = recurringEventsFor(schoolDaySchedule.map((d) => d.date), feedEvents).map((e) => ({
+    ...e,
+    rotatingDay: '',
+    endDate: e.date
+  }));
+  const schoolEvents = [...feedEvents, ...weeklyEvents].sort((a, b) => a.date.localeCompare(b.date));
 
   if (schoolEvents.length > 0 || schoolDaySchedule.length > 0) {
     calendarCache = { timestamp: now, schoolEvents, schoolDaySchedule };
