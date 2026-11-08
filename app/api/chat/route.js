@@ -7,6 +7,7 @@ const AI_DEADLINE_MS = 20000;
 
 import ical from 'node-ical';
 import { recurringEventsFor } from '../../../lib/recurringEvents';
+import { addDays } from '../../../lib/schoolWeek';
 import { GoogleGenAI } from '@google/genai';
 
 const FEEDS = [
@@ -48,7 +49,6 @@ const extractIsoDate = (dateVal) => {
     if (match) return `${match[1]}-${match[2]}-${match[3]}`;
   }
   const d = new Date(dateVal);
-  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) return d.toISOString().slice(0, 10);
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
@@ -64,9 +64,15 @@ const cleanCalendarEvents = (events) => {
     .map((event) => {
       const startDate = new Date(event.start);
       const endDate = event.end ? new Date(event.end) : null;
-      const isAllDay = !event.start.getHours && !event.start.getMinutes;
-      const startIso = extractIsoDate(event.start);
-      const endIso = endDate ? extractIsoDate(endDate) : startIso;
+      // node-ical marks all-day events with datetype 'date'. They arrive as midnight UTC,
+      // and their end date is the day after they finish.
+      const isAllDay = event.datetype === 'date';
+      const startIso = isAllDay ? startDate.toISOString().slice(0, 10) : extractIsoDate(startDate);
+      let endIso = startIso;
+      if (endDate) {
+        endIso = isAllDay ? addDays(endDate.toISOString().slice(0, 10), -1) : extractIsoDate(endDate);
+        if (endIso < startIso) endIso = startIso;
+      }
 
       let timeString = 'All Day';
       if (!isAllDay && typeof event.start.getHours === 'function') {
