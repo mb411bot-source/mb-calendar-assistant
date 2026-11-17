@@ -33,11 +33,11 @@ const AI_DEADLINE_MS = 6000; // stop waiting on the AI model after this long
 const RESPONSE_BUDGET_MS = 7000; // never hold the reply past this for logging
 
 const kindergartenSubjects = {
-  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'PE'],
+  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'PE', 'Walk About'],
   'Day 2': ['Math', 'Shop', 'social studies', 'PE', 'Reading Groups', 'Science', 'Music'],
   'Day 3': ['Math', 'social studies', 'Community Time', 'PE', 'Art', 'English Language Arts'],
   'Day 4': ['English Language Arts', 'Tech', 'Science', 'social studies', 'Music', 'Math', 'Meeting for Sharing'],
-  'Day 5': ['English Language Arts', 'Art', 'Math', 'social studies', 'Library', 'Spanish'],
+  'Day 5': ['English Language Arts', 'Art', 'Math', 'social studies', 'Library', 'Spanish', 'Walk About'],
   'Day 6': ['Tech', 'Math', 'Reading Groups', 'PE', 'social studies', 'Music', 'Art', 'English Language Arts'],
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'social studies', 'English Language Arts', 'Spanish']
 };

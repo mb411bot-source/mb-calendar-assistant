@@ -33,11 +33,11 @@ let calendarCache = {
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const kindergartenSubjects = {
-  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'PE'],
+  'Day 1': ['Art', 'English Language Arts', 'Math', 'Library', 'PE', 'Walk About'],
   'Day 2': ['Math', 'Shop', 'Social Studies', 'PE', 'Reading Groups', 'Science', 'Music'],
   'Day 3': ['Math', 'Social Studies', 'Community Time', 'PE', 'Art', 'English Language Arts'],
   'Day 4': ['English Language Arts', 'Tech', 'Science', 'Social Studies', 'Music', 'Math', 'Meeting for Sharing'],
-  'Day 5': ['English Language Arts', 'Art', 'Math', 'Social Studies', 'Library', 'Spanish'],
+  'Day 5': ['English Language Arts', 'Art', 'Math', 'Social Studies', 'Library', 'Spanish', 'Walk About'],
   'Day 6': ['Tech', 'Math', 'Reading Groups', 'PE', 'Social Studies', 'Music', 'Art', 'English Language Arts'],
   'Day 7': ['Math', 'Meeting for Business', 'PE', 'Library', 'Social Studies', 'English Language Arts', 'Spanish']
 };
